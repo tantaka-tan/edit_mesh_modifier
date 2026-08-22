@@ -1,0 +1,15 @@
+schema_version = "1.0.0"
+blender_version_min = "4.5.0"
+version = "1.0.0"
+id = "edit_mesh_modifier"
+name = "Edit Poly Modifier [编辑多边形修改器]"
+tagline = "Edit the mesh via a cache object, applied in real time"
+license = ["SPDX:GPL-3.0-or-later"]
+maintainer = "RARA"
+type = "add-on"
+website = "https://space.bilibili.com/27284213"
+copyright = ["2026 RARA"]
+tags = ["Object"]
+
+[build]
+paths_exclude_pattern = ["__pycache__/", ".git", "*.zip"]
