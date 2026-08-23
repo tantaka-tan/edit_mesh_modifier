@@ -2,7 +2,7 @@
 bl_info = {
     "name": "Edit Poly Modifier [编辑多边形修改器]",  # 编辑多边形修改器
     "author": "RARA",
-    "version": (1, 0, 0),
+    "version": (1, 0, 1),
     "blender": (4, 5, 0),
     'doc_url': 'https://space.bilibili.com/27284213',
     "location": "Properties > Modifiers Tab",  # 属性面板 > 修改器页签
@@ -10,6 +10,7 @@ bl_info = {
     "category": "Object",
 }
 
+import json  # noqa: E402
 import os  # noqa: E402
 import bpy  # noqa: E402
 import uuid  # noqa: E402
@@ -33,6 +34,12 @@ CACHE_SUFFIX = "edit_mesh_modifier_cache"
 OBJ_SOCKET = "Socket_2"      # 缓存物体 Object 输入
 AUTO_FIX_SOCKET = "Socket_3" # 位置自动修正开关
 HASH_SOCKET = "Socket_4"     # 修改器唯一哈希（文本）
+
+# 缓存网格上的点属性（节点组烘焙写入的基础信息）
+ATTR_BASE = "cache_base"     # 布尔：该点是否属于基础网格
+ATTR_IDX = "cache_idx"       # 整数：基础网格的原始顶点索引
+ATTR_POS = "cache_pos"       # 矢量：基础网格的原始位置
+ATTR_JSON = "idx_pos_cache"  # 字符串：编辑前的 JSON 备份（编辑期间保护）
 
 # ---------------------------------------------------------------------------
 # 核心逻辑
@@ -219,6 +226,76 @@ def bake_cache(context, obj, cache_obj, target, hash_str=""):
                 pass
 
 
+def backup_point_attrs(mesh):
+    """编辑前把 cache_base/cache_idx/cache_pos 备份进 idx_pos_cache 字符串属性。
+
+    字符串属性几乎不会被编辑操作触碰，作为关键属性的"隐形保险柜"。
+    注意：Blender 5.x 字符串属性 .value 是 bytes，需 encode/decode。
+    """
+    base = mesh.attributes.get(ATTR_BASE)
+    idx = mesh.attributes.get(ATTR_IDX)
+    pos = mesh.attributes.get(ATTR_POS)
+    if base is None or idx is None or pos is None:
+        return
+    n = len(mesh.vertices)
+    sa = mesh.attributes.get(ATTR_JSON)
+    if sa is not None and len(sa.data) != n:
+        mesh.attributes.remove(sa)
+        sa = None
+    if sa is None:
+        sa = mesh.attributes.new(ATTR_JSON, "STRING", "POINT")
+    d = sa.data
+    for i in range(n):
+        d[i].value = json.dumps({
+            "base": bool(base.data[i].value),
+            "idx": int(idx.data[i].value),
+            "pos": [round(c, 6) for c in pos.data[i].vector],
+        }).encode()
+
+
+def restore_point_attrs(mesh):
+    """编辑后从 idx_pos_cache 恢复 cache_base/cache_idx/cache_pos。
+
+    仅对"非空且符合 JSON 规范"的顶点写回；其余顶点保持原值。
+    """
+    sa = mesh.attributes.get(ATTR_JSON)
+    if sa is None or len(sa.data) != len(mesh.vertices):
+        return
+    base = mesh.attributes.get(ATTR_BASE)
+    idx = mesh.attributes.get(ATTR_IDX)
+    pos = mesh.attributes.get(ATTR_POS)
+    if base is None or idx is None or pos is None:
+        return
+    n = len(mesh.vertices)
+    bases = [False] * n
+    idxs = [0] * n
+    poss = [0.0] * (n * 3)
+    base.data.foreach_get("value", bases)
+    idx.data.foreach_get("value", idxs)
+    pos.data.foreach_get("vector", poss)
+    for i in range(n):
+        raw = sa.data[i].value
+        if not raw:
+            continue
+        try:
+            rec = json.loads(raw.decode())
+        except Exception:
+            continue
+        if not isinstance(rec, dict):
+            continue
+        bases[i] = bool(rec.get("base", bases[i]))
+        idxs[i] = int(rec.get("idx", idxs[i]))
+        p = rec.get("pos")
+        if isinstance(p, (list, tuple)) and len(p) == 3:
+            poss[i * 3] = float(p[0])
+            poss[i * 3 + 1] = float(p[1])
+            poss[i * 3 + 2] = float(p[2])
+    base.data.foreach_set("value", bases)
+    idx.data.foreach_set("value", idxs)
+    pos.data.foreach_set("vector", poss)
+    mesh.update_tag()
+
+
 # ---------------------------------------------------------------------------
 # 操作符
 # ---------------------------------------------------------------------------
@@ -260,9 +337,10 @@ class EDITMESH_OT_Build(bpy.types.Operator):
                 # 新建修改器
                 target = obj.modifiers.new(MOD_EDIT_NAME, 'NODES')
                 target.node_group = bpy.data.node_groups[NG_EDIT]
-                target.show_manage_panel = False
-                target.show_group_selector = False
-                
+                target.show_manage_panel = False # 默认关闭简化面板
+                target.show_group_selector = False # 默认关闭避免用户误触，改为别的节点了
+                target.show_in_editmode = False # 默认关闭，否则编辑模式编辑原始网格时，会很怪异
+
                 # 写入唯一哈希
                 h = generate_unique_hash(obj)
                 set_modifier_socket_value(target, HASH_SOCKET, h)   # 写入唯一哈希
@@ -409,6 +487,12 @@ class EDITMESH_OT_Edit(bpy.types.Operator):
 
             cache.matrix_world = src.matrix_world.copy()
 
+            # 编辑前把关键点属性备份到字符串属性（尽力而为，失败不阻断编辑）
+            try:
+                backup_point_attrs(cache.data)
+            except Exception:
+                pass
+
             bpy.ops.object.mode_set(mode='EDIT')
 
             wm = context.window_manager
@@ -452,6 +536,11 @@ class EDITMESH_OT_Edit(bpy.types.Operator):
 
         cache = self._cache_obj
         if _object_alive(cache):
+            # 退出编辑后从字符串备份恢复关键点属性（尽力而为）
+            try:
+                restore_point_attrs(cache.data)
+            except Exception:
+                pass
             for coll in list(cache.users_collection):
                 try:
                     coll.objects.unlink(cache)

@@ -1,4 +1,8 @@
 __pycache__/
 *.py[cod]
 *.zip
+*.blend1
+*.blend2
 .git
+# 官方库提交用的多媒体素材，不推送到源码仓库
+pic/
