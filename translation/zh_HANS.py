@@ -1,14 +1,16 @@
-# 简体中文（英 → 中）翻译字典。
+# 简体中文（zh_HANS）翻译字典。
 # 源码为英文，当 Blender UI 语言为中文时，以下条目把英文显示为中文。
 # 键必须与 __init__.py 中的英文字符串完全一致；动态消息用 {placeholder}。
-
 data = {
     # ====== bl_info ======
     "Edit Poly Modifier": "编辑多边形修改器",
     "Properties > Modifiers Tab": "属性面板 > 修改器页签",
     "Edit the mesh via a cache object, applied in real time": "通过缓存物体编辑网格，并将编辑结果实时应用到原物体",
 
-    # ====== EDITMESH_OT_Build ======
+    # ====== EDIT_MESH_MODIFIER_OT_Add ======
+    "Add Edit Poly Modifier": "新建编辑多边形修改器",
+
+    # ====== EDIT_MESH_MODIFIER_OT_Build ======
     "Build Edit Poly Modifier": "构建【编辑多边形修改器】",
     "Mode": "模式",
     "Create": "新建",
@@ -17,10 +19,12 @@ data = {
     "Rebuild the cache of the currently selected modifier": "重建当前选中修改器的缓存",
     "Fork": "独立化",
     "Recalculate the hash and its cache": "重新计算哈希值及缓存",
+    "Sync Upstream": "同步上游",
+    "Sync upstream vertex position changes to cache while keeping edits": "将上游顶点位置的变化同步到缓存，同时保留你的编辑",
     "Build failed: {e}": "构建失败: {e}",
     "Build complete": "构建完成",
 
-    # ====== EDITMESH_OT_Edit ======
+    # ====== EDIT_MESH_MODIFIER_OT_Edit ======
     "Edit": "编辑",
     "Directly edit mesh data while keeping upstream modifiers intact": "在保留上游修改器的基础上，直接进行网格数据编辑",
     "The selected modifier is not an Edit Poly modifier. Run Build first": "当前所选修改器不是【编辑多边形修改器】，请先执行【构建】",
@@ -30,19 +34,13 @@ data = {
     # ====== add-modifier menu ======
     "Create an Edit Poly modifier that lets you edit polygons directly without applying upstream modifiers": "创建一个【编辑多边形修改器】，你可以借助它，在不应用上游修改器的前提下，直接编辑多边形",
 
-    # ====== MODIFIER_PT_EditMeshModifier (header & body) ======
+    # ====== EDIT_MESH_MODIFIER_PT_Main (header & body) ======
     "Edit Polygons": "编辑多边形",
-    "LMB Rebuild edits: rebuild the edited content of the current modifier\nCtrl+LMB Rehash: when you copy an object with the modifier, use this to make the modifier independent": "【左键】重建已编辑内容：重建当前修改器的的已编辑内容\n【ctrl+左键】重建修改器哈希：当你带修改器复制网格时，能帮助你将该修改器独立化",
+    "LMB Sync Upstream: sync upstream modifier changes into the cache while keeping edits\nCtrl+LMB Rebuild: rebuild the edited content of the current modifier\nShift+LMB Rehash: generate a new hash to fork the modifier, e.g. after duplicating": "【左键】同步上游：将上游修改器的变化同步进缓存，同时保留你的编辑\n【ctrl+左键】重建：重建当前修改器的已编辑内容\n【shift+左键】独立化：生成新哈希以独立化该修改器，例如复制物体后",
     "Please select an Edit Poly modifier to edit": "请选择任意【编辑多边形修改器】进行编辑",
     "Instructions": "说明",
     "You can edit the mesh without applying modifiers": "你可以在不应用修改器的前提下",
     "Directly edit the mesh on top of upstream modifiers": "在上游修改器的基础上，直接对网格进行编辑",
-
-    # ====== EditMeshModifierPreferences（偏好设置） ======
-    "How to Access": "功能入口",
-    "Go to the Properties Editor > Modifiers tab": "请前往【属性编辑器界面】》【修改器属性】",
-    "Click Add Modifier > Edit to find the Edit Poly Modifier at the bottom of the panel": "点击【添加修改器】》【编辑】：即可在面板底部找到【编辑多边形修改器】",
-    "Click Add Modifier > Generate to find the Edit Poly Modifier at the bottom of the panel": "点击【添加修改器】》【生成】：即可在面板底部找到【编辑多边形修改器】",
     "Select an Edit Poly modifier, then click Edit Polygons in the header": "选中任一【编辑多边形修改器】后、点击标题栏的【编辑多边形】即可",
     "Build Cache": "构建缓存",
     "Auto Position Fix": "位置自动修正",
@@ -58,6 +56,17 @@ data = {
     "Adjust parameters such as the Solidify thickness": "修改实体化的厚度等参数",
     "Adjust parameters such as the Bevel radius": "修改倒角的半径等参数",
     "All of these changes are picked up by downstream modifiers": "以上的所有修改都会让下游识别",
+
+    # ====== EDIT_MESH_MODIFIER_Preferences（偏好设置） ======
+    "Auto Rehash on Duplicate": "复制时自动独立化",
+    "Automatically generate a new hash and cache when an object is duplicated (Shift+D)": "当物体被复制（Shift+D）时，自动为其生成新哈希与缓存",
+    "Auto Sync Upstream": "自动同步上游",
+    "Automatically sync upstream modifier changes into the cache before entering Edit Polygons": "进入【编辑多边形】前，自动把上游修改器的变化同步进缓存",
+    "Automation & Performance": "自动化与性能",
+    "How to Access": "功能入口",
+    "Go to the Properties Editor > Modifiers tab": "请前往【属性编辑器界面】》【修改器属性】",
+    "Click Add Modifier > Edit to find the Edit Poly Modifier at the bottom of the panel": "点击【添加修改器】》【编辑】：即可在面板底部找到【编辑多边形修改器】",
+    "Click Add Modifier > Generate to find the Edit Poly Modifier at the bottom of the panel": "点击【添加修改器】》【生成】：即可在面板底部找到【编辑多边形修改器】",
 
     # ====== RuntimeError messages (shown inside "Build failed: {e}") ======
     "Cannot load node groups, please check {file}": "无法加载节点组，请检查 {file}",

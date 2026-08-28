@@ -1,8 +1,9 @@
 
+
 bl_info = {
     "name": "Edit Poly Modifier [编辑多边形修改器]",  # 编辑多边形修改器
     "author": "RARA",
-    "version": (1, 0, 1),
+    "version": (1, 0, 2),
     "blender": (4, 5, 0),
     'doc_url': 'https://space.bilibili.com/27284213',
     "location": "Properties > Modifiers Tab",  # 属性面板 > 修改器页签
@@ -145,20 +146,6 @@ def set_modifier_socket_value(mod, key, value):
     except Exception:
         return False
 
-def get_cache_object(mod, obj, hash_str=""):
-    """优先用 Socket_2 已记录的缓存；再按 名字+hash 查；没有才新建。"""
-    ref = get_modifier_socket_value(mod, OBJ_SOCKET)
-    
-    if ref is not None and ref.type == 'MESH' and ref.name.endswith(CACHE_SUFFIX):
-        return ref
-    name = get_cache_name(obj.name, hash_str)
-    cache = bpy.data.objects.get(name)
-    if cache is None:
-        mesh = bpy.data.meshes.new(name)
-        cache = bpy.data.objects.new(name, mesh)
-    return cache
-
-
 def get_target_modifier(obj):
     """仅当当前所选修改器是几何节点修改器且节点树为 edit_mesh_modifier 时才视为找到。"""
     if not obj:
@@ -191,33 +178,49 @@ def bake_cache(context, obj, cache_obj, target, hash_str=""):
         saved.append((m, m.show_viewport))
         m.show_viewport = False
 
-    temp = obj.modifiers.new(MOD_TEMP_NAME, 'NODES')
-    temp.node_group = bpy.data.node_groups[NG_SAVE]
-    temp.show_manage_panel = False
-    temp.show_group_selector = False
-
+    temp = None
     try:
+        # 临时加【保存数据】节点修改器（整个流程包进 try，任何一步失败都会走 finally 清理）
+        temp = obj.modifiers.new(MOD_TEMP_NAME, 'NODES')
+        temp.node_group = bpy.data.node_groups[NG_SAVE]
+        temp.show_manage_panel = False
+        temp.show_group_selector = False
+
         depsgraph = context.evaluated_depsgraph_get()
         depsgraph.update()
         eval_obj = obj.evaluated_get(depsgraph)
-        eval_mesh = eval_obj.to_mesh()
-        if eval_mesh:
-            old = cache_obj.data
-            new = eval_mesh.copy()
-            cache_obj.data = new
-            if old is not new:
+        eval_mesh = None
+        try:
+            eval_mesh = eval_obj.to_mesh()
+            if eval_mesh:
+                old = cache_obj.data
+                new = eval_mesh.copy()
+                cache_obj.data = new
+                if old is not new:
+                    try:
+                        if old.users <= 1:
+                            bpy.data.meshes.remove(old)
+                    except Exception:
+                        pass
                 try:
-                    if old.users <= 1:
-                        bpy.data.meshes.remove(old)
+                    new.name = get_cache_name(obj.name, hash_str)
                 except Exception:
                     pass
-            try:
-                new.name = get_cache_name(obj.name, hash_str)
-            except Exception:
-                pass
-        eval_obj.to_mesh_clear()
+                # bake 后立即把关键点属性快照进字符串属性（"隐形保险柜"），
+                # 编辑模式不再重复备份；SYNC 更新基准后由 SYNC 路径单独刷新
+                try:
+                    backup_point_attrs(new)
+                except Exception:
+                    pass
+        finally:
+            # 无论拷贝成功与否，都释放评估网格，避免泄漏
+            if eval_mesh is not None:
+                try:
+                    eval_obj.to_mesh_clear()
+                except Exception:
+                    pass
     finally:
-        if temp.name in obj.modifiers:
+        if temp is not None and temp.name in obj.modifiers:
             obj.modifiers.remove(temp)
         for m, state in saved:
             try:
@@ -296,11 +299,173 @@ def restore_point_attrs(mesh):
     mesh.update_tag()
 
 
+
+def sync_upstream_to_cache(context, obj, cache_obj, target):
+    """在上游顶点位置变化时，同步更新缓存物体，保留已有的编辑偏移。"""
+    # 1. 获取上游最新网格（禁用目标及下游修改器）
+    t_index = obj.modifiers.find(target.name)
+    if t_index == -1:
+        return False, f"Modifier '{target.name}' not found on object."
+        
+    saved_states = []
+    for i in range(t_index, len(obj.modifiers)):
+        m = obj.modifiers[i]
+        saved_states.append((m, m.show_viewport))
+        m.show_viewport = False
+
+    _eval_obj = None
+    upstream_mesh = None
+    try:
+        depsgraph = context.evaluated_depsgraph_get()
+        depsgraph.update()
+        _eval_obj = obj.evaluated_get(depsgraph)
+        upstream_mesh = _eval_obj.to_mesh()
+
+        if not upstream_mesh:
+            return False, "Upstream mesh invalid."
+
+        # --- 核心逻辑变更：直接获取上游所有顶点的坐标列表 ---
+        num_up = len(upstream_mesh.vertices)
+        up_coords = [0.0] * (num_up * 3)
+        upstream_mesh.vertices.foreach_get("co", up_coords)
+
+        # 2. 获取 Cache 物体的数据和属性
+        cache_mesh = cache_obj.data
+        cache_idx_attr = cache_mesh.attributes.get(ATTR_IDX)
+        cache_pos_attr = cache_mesh.attributes.get(ATTR_POS)
+        
+        if not cache_idx_attr or not cache_pos_attr:
+            return False, "Cache object is missing internal attributes (idx/pos). Please Rebuild."
+
+        n_ca = len(cache_mesh.vertices)
+        
+        # 获取 Cache 记录的“原始索引”（即它对应上游哪个点）
+        my_ids = [0] * n_ca
+        cache_idx_attr.data.foreach_get("value", my_ids)
+        
+        # 获取 Cache 记录的“旧基准位置”
+        old_base_poss = [0.0] * (n_ca * 3)
+        cache_pos_attr.data.foreach_get("vector", old_base_poss)
+        
+        # 获取 Cache 当前的顶点位置（包含用户之前的编辑）
+        current_cos = [0.0] * (n_ca * 3)
+        cache_mesh.vertices.foreach_get("co", current_cos)
+
+        # 3. 执行匹配同步
+        new_base_poss = [0.0] * (n_ca * 3) # 用于更新 cache_pos 属性
+        
+        for i in range(n_ca):
+            # target_idx 是这个 Cache 顶点对应的上游顶点索引
+            target_idx = my_ids[i]
+            idx = i * 3
+            
+            # 检查索引是否在上游范围内（防止上游删减了顶点导致越界）
+            if 0 <= target_idx < num_up:
+                # 找到上游对应点的坐标
+                up_idx = target_idx * 3
+                tx = up_coords[up_idx]
+                ty = up_coords[up_idx + 1]
+                tz = up_coords[up_idx + 2]
+                
+                # 计算位移增量 (当前上游位置 - 上次记录的基准位置)
+                dx = tx - old_base_poss[idx]
+                dy = ty - old_base_poss[idx+1]
+                dz = tz - old_base_poss[idx+2]
+                
+                # 将增量叠加到 Cache 顶点上
+                current_cos[idx]   += dx
+                current_cos[idx+1] += dy
+                current_cos[idx+2] += dz
+                
+                # 记录新的基准位置，供下次同步使用
+                new_base_poss[idx]   = tx
+                new_base_poss[idx+1] = ty
+                new_base_poss[idx+2] = tz
+            else:
+                # 如果上游找不到这个索引（点被删了），保持原样
+                new_base_poss[idx]   = old_base_poss[idx]
+                new_base_poss[idx+1] = old_base_poss[idx+1]
+                new_base_poss[idx+2] = old_base_poss[idx+2]
+
+        # 4. 写回数据
+        cache_mesh.vertices.foreach_set("co", current_cos)
+        cache_pos_attr.data.foreach_set("vector", new_base_poss)
+        
+        cache_mesh.update()
+        return True, "Sync successful (Index-Pointer mode)"
+
+    except Exception as e:
+        return False, f"Unexpected error during sync: {str(e)}"
+        
+    finally:
+        # 释放评估网格，避免任何路径泄漏
+        if upstream_mesh is not None and _eval_obj is not None:
+            try:
+                _eval_obj.to_mesh_clear()
+            except Exception:
+                pass
+        # 恢复修改器状态
+        for m, state in saved_states:
+            try:
+                m.show_viewport = state
+            except Exception:
+                pass
+
+              
+
 # ---------------------------------------------------------------------------
 # 操作符
 # ---------------------------------------------------------------------------
-class EDITMESH_OT_Build(bpy.types.Operator):
-    bl_idname = "editmesh.build"
+class EDIT_MESH_MODIFIER_OT_Add(bpy.types.Operator):
+    bl_idname = "edit_mesh_modifier.add"
+    bl_label = "Add Edit Poly Modifier"  # 新建编辑多边形修改器
+    bl_options = {'REGISTER', 'UNDO'}
+
+    data: bpy.props.StringProperty(options={'SKIP_SAVE'})
+
+    @classmethod
+    def description(cls, context, properties):
+        return _i18n.pget_tmpl(properties.data)
+
+    @classmethod
+    def poll(cls, context):
+        return context.object is not None and context.object.type == 'MESH'
+
+    def execute(self, context):
+        """在活动修改器下方新建一个编辑多边形修改器并构建缓存。"""
+        obj = context.object
+        try:
+            if not refresh_node_groups():
+                raise RuntimeError(_i18n.pget_tmpl("Cannot load node groups, please check {file}", file=os.path.basename(LIB_PATH)))  # 无法加载节点组，请检查 {file}
+
+            target = obj.modifiers.new(MOD_EDIT_NAME, 'NODES')
+            target.node_group = bpy.data.node_groups[NG_EDIT]
+            target.show_manage_panel = False  # 默认关闭简化面板
+            target.show_group_selector = False  # 默认关闭避免用户误触，改为别的节点了
+            target.show_in_editmode = False  # 默认关闭，否则编辑模式编辑原始网格时，会很怪异
+
+            # 写入唯一哈希
+            h = generate_unique_hash(obj)
+            set_modifier_socket_value(target, HASH_SOCKET, h)
+
+            # 新建缓存物体
+            name = get_cache_name(obj.name, h)
+            mesh = bpy.data.meshes.new(name)
+            cache = bpy.data.objects.new(name, mesh)
+
+            # 构建缓存
+            set_modifier_socket_value(target, OBJ_SOCKET, cache)
+            bake_cache(context, obj, cache, target, h)
+        except Exception as e:
+            self.report({'ERROR'}, _i18n.pget_tmpl("Build failed: {e}", e=str(e)))  # 构建失败: {e}
+            return {'CANCELLED'}
+
+        self.report({'INFO'}, _i18n.pget_tmpl("Build complete"))  # 构建完成
+        return {'FINISHED'}
+
+
+class EDIT_MESH_MODIFIER_OT_Build(bpy.types.Operator):
+    bl_idname = "edit_mesh_modifier.build"
     bl_label = "Build Edit Poly Modifier"  # 构建【编辑多边形修改器】
     bl_options = {'REGISTER', 'UNDO'}
     
@@ -308,10 +473,10 @@ class EDITMESH_OT_Build(bpy.types.Operator):
     mode: bpy.props.EnumProperty(
         name="Mode",  # 模式
         items=[
-            ('BUILD', "Create", "Create an Edit Poly modifier and build its cache"),  # 新建 / 新建编辑多边形修改器并构建缓存
             ('REBUILD', "Rebuild", "Rebuild the cache of the currently selected modifier"),  # 重建 / 重建当前选中修改器的缓存
             ('REHASH', "Fork", "Recalculate the hash and its cache"),  # 独立化 / 重新计算哈希值及缓存
-        ],default='REBUILD')
+            ('SYNC', "Sync Upstream", "Sync upstream vertex position changes to cache while keeping edits"),
+        ], default='REBUILD')
 
     @classmethod
     def description(cls, context, properties):
@@ -322,39 +487,23 @@ class EDITMESH_OT_Build(bpy.types.Operator):
         return context.object is not None and context.object.type == 'MESH'
 
     def invoke(self, context, event):
-        if event.ctrl or event.shift or event.alt:
+        if event.shift:
             self.mode = 'REHASH'
+        elif event.ctrl:
+            self.mode = 'REBUILD'
+        else:
+            self.mode = 'SYNC'
         return self.execute(context)
         
     def execute(self, context):
         obj = context.object
+        target = None
+        
         try:
             if not refresh_node_groups():
                 raise RuntimeError(_i18n.pget_tmpl("Cannot load node groups, please check {file}", file=os.path.basename(LIB_PATH)))  # 无法加载节点组，请检查 {file}
             
-            if self.mode == 'BUILD':
-                """BUILD：在活动修改器下方新建一个编辑多边形修改器。"""
-                # 新建修改器
-                target = obj.modifiers.new(MOD_EDIT_NAME, 'NODES')
-                target.node_group = bpy.data.node_groups[NG_EDIT]
-                target.show_manage_panel = False # 默认关闭简化面板
-                target.show_group_selector = False # 默认关闭避免用户误触，改为别的节点了
-                target.show_in_editmode = False # 默认关闭，否则编辑模式编辑原始网格时，会很怪异
-
-                # 写入唯一哈希
-                h = generate_unique_hash(obj)
-                set_modifier_socket_value(target, HASH_SOCKET, h)   # 写入唯一哈希
-                
-                # 新建缓存物体
-                name = get_cache_name(obj.name, h)
-                mesh = bpy.data.meshes.new(name)
-                cache = bpy.data.objects.new(name, mesh)
-
-                # 构建缓存
-                set_modifier_socket_value(target, OBJ_SOCKET, cache)
-                bake_cache(context, obj, cache, target, h)
-                
-            elif self.mode == 'REBUILD':
+            if self.mode == 'REBUILD':
                 """REBUILD：重建当前选中修改器，不改哈希。"""
                 # 以选中的修改器为待操作项
                 target = get_target_modifier(obj)
@@ -408,6 +557,8 @@ class EDITMESH_OT_Build(bpy.types.Operator):
                     new_mesh.name = new_name
                     cache = bpy.data.objects.new(new_name, new_mesh)
                     set_modifier_socket_value(target, OBJ_SOCKET, cache)
+                    # 绑定新缓存后再清理旧缓存，避免孤儿物体/网格泄漏
+                    _remove_cache_object(socket_obj)
 
                 else:
                     # 保底新建
@@ -416,7 +567,27 @@ class EDITMESH_OT_Build(bpy.types.Operator):
                     # 构建缓存
                     set_modifier_socket_value(target, OBJ_SOCKET, cache)
                     bake_cache(context, obj, cache, target, h)
+
+            elif self.mode == 'SYNC':
+                target = get_target_modifier(obj)
+                if target is None:
+                    raise RuntimeError(_i18n.pget_tmpl("Please select an Edit Poly modifier first"))  # 请先选中一个编辑多边形修改器
+
+                cache = get_modifier_socket_value(target, OBJ_SOCKET)
+                if cache is None or cache.type != 'MESH':
+                    raise RuntimeError("No valid cache object found to sync")
                 
+                # 执行同步
+                success, message = sync_upstream_to_cache(context, obj, cache, target)
+                
+                if success:
+                    # SYNC 更新了 cache_pos 基准，必须刷新字符串快照，
+                    # 否则下次编辑恢复时会回退到 bake 时的旧基准
+                    backup_point_attrs(cache.data)
+                    self.report({'INFO'}, f"Edit Poly: {message}")
+                else:
+                    raise RuntimeError(f"Sync failed: {message}")
+                    
             else:
                 raise RuntimeError(_i18n.pget_tmpl("Unsupported mode; this should never happen"))  # 未受支持的模式，理论上这不该发生
 
@@ -437,8 +608,15 @@ def _get_view3d_spaces(context):
                 spaces.append(area.spaces.active)
     return spaces
 
-class EDITMESH_OT_Edit(bpy.types.Operator):
-    bl_idname = "editmesh.edit"
+def _mesh_geom_snapshot(mesh):
+    """返回网格几何的轻量指纹，用于判断编辑期间是否产生了实际改动。"""
+    n_vert = len(mesh.vertices)
+    co = [0.0] * (n_vert * 3)
+    mesh.vertices.foreach_get("co", co)
+    return (n_vert, len(mesh.edges), len(mesh.polygons), round(sum(co), 3))
+
+class EDIT_MESH_MODIFIER_OT_Edit(bpy.types.Operator):
+    bl_idname = "edit_mesh_modifier.edit"
     bl_label = "Edit"  # 编辑
     bl_description = "Directly edit mesh data while keeping upstream modifiers intact"  # 在保留上游修改器的基础上，直接进行网格数据编辑
     bl_options = {'REGISTER'}
@@ -447,10 +625,12 @@ class EDITMESH_OT_Edit(bpy.types.Operator):
     _src_obj = None
     _cache_obj = None
     _overlay_states = []
+    _snapshot = None
 
     @classmethod
     def poll(cls, context):
         return context.object is not None and context.object.type == 'MESH'
+
 
     def execute(self, context):
         src = context.object
@@ -467,6 +647,8 @@ class EDITMESH_OT_Edit(bpy.types.Operator):
 
         self._src_obj = src
         self._cache_obj = cache
+        
+        
         # 记录并打开所有 3D 视图的重拓扑覆盖
         self._overlay_states = []
         for sp in _get_view3d_spaces(context):
@@ -487,11 +669,28 @@ class EDITMESH_OT_Edit(bpy.types.Operator):
 
             cache.matrix_world = src.matrix_world.copy()
 
-            # 编辑前把关键点属性备份到字符串属性（尽力而为，失败不阻断编辑）
+            # 【自动同步上游】勾选后，进入编辑前先把上游修改器的变化同步进缓存
             try:
-                backup_point_attrs(cache.data)
+                pref = bpy.context.preferences.addons[__name__].preferences
+                auto_sync = pref.auto_sync_upstream
             except Exception:
-                pass
+                auto_sync = False
+            if auto_sync:
+                success, message = sync_upstream_to_cache(context, src, cache, target)
+                if success:
+                    # 同步改变了 cache_pos 基准，刷新字符串快照
+                    try:
+                        backup_point_attrs(cache.data)
+                    except Exception:
+                        pass
+                else:
+                    self.report({'INFO'}, f"Edit Poly: Auto sync skipped - {message}")
+
+            # 记录几何快照（同步之后的坐标作为编辑前基准），用于退出时判断是否真的发生了编辑
+            try:
+                self._snapshot = _mesh_geom_snapshot(cache.data)
+            except Exception:
+                self._snapshot = None
 
             bpy.ops.object.mode_set(mode='EDIT')
 
@@ -508,7 +707,8 @@ class EDITMESH_OT_Edit(bpy.types.Operator):
         if self._timer is not None:
             return {'RUNNING_MODAL'}
         return {'FINISHED'}
-
+        
+        
     def modal(self, context, event):
         try:
             if event.type == 'TIMER':
@@ -561,6 +761,18 @@ class EDITMESH_OT_Edit(bpy.types.Operator):
             if context.view_layer:
                 context.view_layer.objects.active = src
 
+        # 仅当编辑期间产生了实际几何改动时才推撤销点，避免污染撤销栈
+        snapshot = getattr(self, '_snapshot', None)
+        if snapshot is not None and _object_alive(cache):
+            try:
+                changed = _mesh_geom_snapshot(cache.data) != snapshot
+            except Exception:
+                changed = False
+        else:
+            changed = False
+        if changed:
+            bpy.ops.ed.undo_push(message="Exit Edit Poly")
+
         if self._timer is not None:
             wm = context.window_manager
             try:
@@ -579,10 +791,9 @@ def modifier_add_menu_draw(self, context):
     if obj and obj.type == 'MESH':
         layout.separator()
         # 编辑多边形修改器
-        op = layout.operator(EDITMESH_OT_Build.bl_idname, text="Edit Poly Modifier", icon='EDITMODE_HLT')
+        op = layout.operator(EDIT_MESH_MODIFIER_OT_Add.bl_idname, text="Edit Poly Modifier", icon='EDITMODE_HLT')
         # 创建一个【编辑多边形修改器】，你可以借助它，在不应用上游修改器的前提下，直接编辑多边形
         op.data = "Create an Edit Poly modifier that lets you edit polygons directly without applying upstream modifiers"
-        op.mode = 'BUILD'
 
 def draw_socket_input(layout, mod, key, text="", icon='NONE'):
     """按版本绘制 socket 输入控件（5.1 用 ID 属性路径，5.2 用新 API）。"""
@@ -630,9 +841,9 @@ def draw_example(layout):
     minicol.label(text="Edit Poly Modifier", icon="STRIP_COLOR_01")  # 编辑多边形修改器
     minicol.label(text="All of these changes are picked up by downstream modifiers", icon="MOD_SUBSURF")  # 以上的所有修改都会让下游识别
 
-class MODIFIER_PT_EditMeshModifier(bpy.types.Panel):
+class EDIT_MESH_MODIFIER_PT_Main(bpy.types.Panel):
     bl_label = ""
-    bl_idname = "MODIFIER_PT_EditMeshModifier"
+    bl_idname = "EDIT_MESH_MODIFIER_PT_Main"
     bl_space_type = 'PROPERTIES'
     bl_region_type = 'WINDOW'
     bl_context = "modifier"
@@ -658,15 +869,15 @@ class MODIFIER_PT_EditMeshModifier(bpy.types.Panel):
             row.label(text="", icon='EDITMODE_HLT')
             row.label(text = f"【{mod.name}】")
             
-            op = row.operator(EDITMESH_OT_Build.bl_idname, text="", icon='FILE_REFRESH')
-            # 【左键】重建已编辑内容：重建当前修改器的的已编辑内容 / 【ctrl+左键】重建修改器哈希：当你带修改器复制网格时，能帮助你将该修改器独立化
-            op.data = "LMB Rebuild edits: rebuild the edited content of the current modifier\nCtrl+LMB Rehash: when you copy an object with the modifier, use this to make the modifier independent"
+            op = row.operator(EDIT_MESH_MODIFIER_OT_Build.bl_idname, text="", icon='FILE_REFRESH')
+            # 【左键】同步上游 / 【ctrl+左键】重建已编辑内容 / 【shift+左键】独立化（复制物体后换新哈希）
+            op.data = "LMB Sync Upstream: sync upstream modifier changes into the cache while keeping edits\nCtrl+LMB Rebuild: rebuild the edited content of the current modifier\nShift+LMB Rehash: generate a new hash to fork the modifier, e.g. after duplicating"
             op.mode = 'REBUILD'
             
             red_row = row.row()
             red_row.alert = True
             # 编辑多边形
-            red_row.operator(EDITMESH_OT_Edit.bl_idname, text="Edit Polygons", icon='EDITMODE_HLT')
+            red_row.operator(EDIT_MESH_MODIFIER_OT_Edit.bl_idname, text="Edit Polygons", icon='EDITMODE_HLT')
             socket_icon = 'UV_SYNC_SELECT' if get_modifier_socket_value(mod, AUTO_FIX_SOCKET) else 'FREEZE'
             draw_socket_input(row, mod, AUTO_FIX_SOCKET, text="", icon=socket_icon)
             row.label(text="", icon='BLANK1') #icon
@@ -689,13 +900,13 @@ class MODIFIER_PT_EditMeshModifier(bpy.types.Panel):
         mod = get_target_modifier(context.object)
         if  mod:
             row = col.row(align=True)
-            op = row.operator(EDITMESH_OT_Build.bl_idname, text="Build Cache", icon='FILE_REFRESH')  # 构建缓存
-            # 【左键】重建已编辑内容：重建当前修改器的的已编辑内容 / 【ctrl+左键】重建修改器哈希：当你带修改器复制网格时，能帮助你将该修改器独立化
-            op.data = "LMB Rebuild edits: rebuild the edited content of the current modifier\nCtrl+LMB Rehash: when you copy an object with the modifier, use this to make the modifier independent"
+            op = row.operator(EDIT_MESH_MODIFIER_OT_Build.bl_idname, text="Build Cache", icon='FILE_REFRESH')  # 构建缓存
+            # 【左键】同步上游 / 【ctrl+左键】重建已编辑内容 / 【shift+左键】独立化（复制物体后换新哈希）
+            op.data = "LMB Sync Upstream: sync upstream modifier changes into the cache while keeping edits\nCtrl+LMB Rebuild: rebuild the edited content of the current modifier\nShift+LMB Rehash: generate a new hash to fork the modifier, e.g. after duplicating"
             op.mode = 'REBUILD'
             
             # 编辑多边形
-            row.operator(EDITMESH_OT_Edit.bl_idname, text="Edit Polygons", icon='EDITMODE_HLT')
+            row.operator(EDIT_MESH_MODIFIER_OT_Edit.bl_idname, text="Edit Polygons", icon='EDITMODE_HLT')
             socket_icon = 'UV_SYNC_SELECT' if get_modifier_socket_value(mod, AUTO_FIX_SOCKET) else 'FREEZE'
             draw_socket_input(row, mod, AUTO_FIX_SOCKET, text="Auto Position Fix", icon=socket_icon)  # 位置自动修正
         else:
@@ -703,12 +914,30 @@ class MODIFIER_PT_EditMeshModifier(bpy.types.Panel):
             
         draw_example(layout.box())
 
-class EditMeshModifierPreferences(bpy.types.AddonPreferences):
+class EDIT_MESH_MODIFIER_Preferences(bpy.types.AddonPreferences):
     bl_idname = __name__
 
+    auto_rehash: bpy.props.BoolProperty(
+        name="Auto Rehash on Duplicate",
+        description="Automatically generate a new hash and cache when an object is duplicated (Shift+D)",
+        default=True
+    )
+
+    auto_sync_upstream: bpy.props.BoolProperty(
+        name="Auto Sync Upstream",
+        description="Automatically sync upstream modifier changes into the cache before entering Edit Polygons",
+        default=False
+    )
+    
     def draw(self, context):
         layout = self.layout
         col = layout.column(align=True)
+        # 性能与自动化设置
+        box = col.box()
+        box.label(text="Automation & Performance", icon='SETTINGS')
+        box.prop(self, "auto_rehash")
+        box.prop(self, "auto_sync_upstream")
+        
         col.label(text="Instructions", icon='INFO')  # 说明
         col.label(text="You can edit the mesh without applying modifiers")  # 你可以在不应用修改器的前提下
         col.label(text="Directly edit the mesh on top of upstream modifiers")  # 在上游修改器的基础上，直接对网格进行编辑
@@ -723,14 +952,183 @@ class EditMeshModifierPreferences(bpy.types.AddonPreferences):
         draw_example(layout)
 
 
+# 自动独立化
+_is_system_ready = True
+_known_objects = {}   # {obj.as_pointer(): obj.name}，识别"自上次更新以来新增"的物体
+
+@bpy.app.handlers.persistent
+def on_load_pre(dummy):
+    """当点击‘打开文件’的一瞬间，立即锁定系统"""
+    global _is_system_ready
+    _is_system_ready = False
+
+@bpy.app.handlers.persistent
+def on_load_post(dummy):
+    """文件加载完成后，开启定时器准备解锁"""
+    # 延迟时间建议 0.5 ~ 1.0 秒即可，3秒太久了
+    bpy.app.timers.register(enable_sync_after_load, first_interval=1.0)
+
+def enable_sync_after_load():
+    global _is_system_ready
+    global _known_objects
+    # 新文件环境：重置已登记物体表，防止旧文件残留导致误判
+    _known_objects = {}
+    _is_system_ready = True
+    return None
+
+def _is_new_object(obj):
+    """判断 obj 是否为自上次 depsgraph 更新以来新出现的物体。"""
+    ptr = obj.as_pointer()
+    if _known_objects.get(ptr) == obj.name:
+        return False
+    _known_objects[ptr] = obj.name
+    return True
+
+def _cache_referenced_by_other(cache_obj):
+    """检查缓存物体是否仍被其他【编辑多边形】修改器引用（复制场景会共享）。"""
+    if cache_obj is None:
+        return False
+    for o in bpy.data.objects:
+        if o is cache_obj:
+            continue
+        for mod in o.modifiers:
+            if mod.type == 'NODES' and mod.node_group and mod.node_group.name == NG_EDIT:
+                ref = get_modifier_socket_value(mod, OBJ_SOCKET)
+                if ref is not None and ref.name == cache_obj.name:
+                    return True
+    return False
+
+def _remove_cache_object(cache_obj):
+    """安全删除缓存物体及其独占的网格。
+
+    仅当旧缓存不再被任何修改器引用时才删除，避免复制共享场景下破坏原物体。
+    """
+    if cache_obj is None:
+        return
+    if _cache_referenced_by_other(cache_obj):
+        return
+    try:
+        mesh = cache_obj.data
+        bpy.data.objects.remove(cache_obj, do_unlink=True)
+        if mesh is not None and mesh.users <= 0:
+            bpy.data.meshes.remove(mesh, do_unlink=True)
+    except Exception:
+        pass
+
+def rehash_modifier_instance(obj, mod, old_hash):
+    """执行具体的独立化逻辑：换哈希、拷数据"""
+    new_h = generate_unique_hash(obj)
+    set_modifier_socket_value(mod, HASH_SOCKET, new_h)
+
+    # 获取旧的缓存物体（副本目前还指向它）
+    old_cache = get_modifier_socket_value(mod, OBJ_SOCKET)
+
+    new_name = get_cache_name(obj.name, new_h)
+
+    if old_cache and old_cache.type == 'MESH':
+        # 重要：克隆原有的编辑数据，而不是新建空的
+        new_mesh = old_cache.data.copy()
+        new_mesh.name = new_name
+        new_cache = bpy.data.objects.new(new_name, new_mesh)
+    else:
+        # 如果没找到旧缓存，则新建空的
+        new_mesh = bpy.data.meshes.new(new_name)
+        new_cache = bpy.data.objects.new(new_name, new_mesh)
+
+    set_modifier_socket_value(mod, OBJ_SOCKET, new_cache)
+    # 绑定新缓存后再清理旧缓存，避免孤儿物体/网格泄漏
+    _remove_cache_object(old_cache)
+    print(f"Edit Poly: Object '{obj.name}' has been automatically rehashed.")
+
+def auto_rehash_duplicates(candidates):
+    """对候选新增物体做哈希冲突检查，冲突则自动独立化。"""
+    if not candidates:
+        return
+
+    # 建立当前场景的哈希索引（仅在新物体出现时执行，低频）
+    seen_hashes = {}
+    for obj in bpy.context.view_layer.objects:
+        if obj.type != 'MESH':
+            continue
+        for mod in obj.modifiers:
+            if mod.type == 'NODES' and mod.node_group and mod.node_group.name == NG_EDIT:
+                h = get_modifier_socket_value(mod, HASH_SOCKET)
+                if h and h not in seen_hashes:
+                    seen_hashes[h] = obj
+
+    # 逐个检查候选，仅处理哈希冲突的副本
+    for obj in candidates:
+        try:
+            if obj.name not in bpy.data.objects or obj.type != 'MESH':
+                continue
+        except ReferenceError:
+            continue
+        for mod in obj.modifiers:
+            if mod.type == 'NODES' and mod.node_group and mod.node_group.name == NG_EDIT:
+                h = get_modifier_socket_value(mod, HASH_SOCKET)
+                if not h:
+                    continue
+                if h in seen_hashes:
+                    if seen_hashes[h] is not obj:
+                        rehash_modifier_instance(obj, mod, h)
+                else:
+                    seen_hashes[h] = obj
+
+@bpy.app.handlers.persistent
+def depsgraph_handler(scene, depsgraph):
+    """依赖图句柄：只关注新增物体，避免每帧全量扫描。"""
+    global _is_system_ready
+    if not _is_system_ready:
+        return
+    # 确保 context 可用后再读取偏好设置
+    try:
+        pref = bpy.context.preferences.addons[__name__].preferences
+    except Exception:
+        return
+    if not pref.auto_rehash:
+        return
+
+    candidates = []
+    seen_ptrs = set()
+    try:
+        for update in depsgraph.updates:
+            id_data = update.id
+            # 5.1 起 DepsgraphUpdate 不再提供 id_type，直接用 rna 类型判断
+            if not isinstance(id_data, bpy.types.Object):
+                continue
+            obj = getattr(id_data, "original", id_data)
+            if obj is None or obj.type != 'MESH':
+                continue
+            ptr = obj.as_pointer()
+            if ptr in seen_ptrs:
+                continue
+            seen_ptrs.add(ptr)
+            if _is_new_object(obj):
+                candidates.append(obj)
+    except Exception:
+        return
+    if candidates:
+        # 用 Timer 延迟执行，避开 depsgraph 锁定状态
+        bpy.app.timers.register(
+            lambda: auto_rehash_duplicates(candidates),
+            first_interval=0.01)
+
+    
+    
+    
+    
+    
+    
+
 # ---------------------------------------------------------------------------
 # 注册
 # ---------------------------------------------------------------------------
 CLASSES = (
-    EDITMESH_OT_Build,
-    EDITMESH_OT_Edit,
-    MODIFIER_PT_EditMeshModifier,
-    EditMeshModifierPreferences,
+    EDIT_MESH_MODIFIER_OT_Add,
+    EDIT_MESH_MODIFIER_OT_Build,
+    EDIT_MESH_MODIFIER_OT_Edit,
+    EDIT_MESH_MODIFIER_PT_Main,
+    EDIT_MESH_MODIFIER_Preferences,
 )
 
 
@@ -743,13 +1141,31 @@ def register():
     bpy.types.OBJECT_MT_modifier_add_edit.append(modifier_add_menu_draw)
     bpy.types.OBJECT_MT_modifier_add_generate.append(modifier_add_menu_draw)
 
+    # 绑定加载前后的句柄
+    if on_load_pre not in bpy.app.handlers.load_pre:
+        bpy.app.handlers.load_pre.append(on_load_pre)
+    if on_load_post not in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.append(on_load_post)
+    # 注册句柄
+    if depsgraph_handler not in bpy.app.handlers.depsgraph_update_post:
+        bpy.app.handlers.depsgraph_update_post.append(depsgraph_handler)
+    # 初始化物体计数
 
+    
 def unregister():
     _i18n.unregister()
 
     bpy.types.OBJECT_MT_modifier_add_edit.remove(modifier_add_menu_draw)
     bpy.types.OBJECT_MT_modifier_add_generate.remove(modifier_add_menu_draw)
-    
+
+    if on_load_pre in bpy.app.handlers.load_pre:
+        bpy.app.handlers.load_pre.remove(on_load_pre)
+    if on_load_post in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.remove(on_load_post)
+    # 移除句柄
+    if depsgraph_handler in bpy.app.handlers.depsgraph_update_post:
+        bpy.app.handlers.depsgraph_update_post.remove(depsgraph_handler)
+        
     for cls in reversed(CLASSES):
         bpy.utils.unregister_class(cls)
 

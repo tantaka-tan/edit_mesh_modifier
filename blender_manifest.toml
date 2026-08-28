@@ -1,6 +1,6 @@
 schema_version = "1.0.0"
 blender_version_min = "4.5.0"
-version = "1.0.1"
+version = "1.0.2"
 id = "edit_mesh_modifier"
 name = "Edit Poly Modifier [编辑多边形修改器]"
 tagline = "Edit the mesh via a cache object, applied in real time"
@@ -12,4 +12,4 @@ copyright = ["2026 RARA"]
 tags = ["Object"]
 
 [build]
-paths_exclude_pattern = ["__pycache__/", "pic/", ".git", ".gitignore", "*.zip"]
+paths_exclude_pattern = ["__pycache__/", "pic/", ".git", ".gitignore", "*.zip", "*.md"]
