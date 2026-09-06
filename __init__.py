@@ -3,7 +3,7 @@
 bl_info = {
     "name": "Edit Poly Modifier [编辑多边形修改器]",  # 编辑多边形修改器
     "author": "RARA",
-    "version": (1, 0, 2),
+    "version": (1, 0, 3),
     "blender": (4, 5, 0),
     'doc_url': 'https://space.bilibili.com/27284213',
     "location": "Properties > Modifiers Tab",  # 属性面板 > 修改器页签
@@ -615,6 +615,29 @@ def _mesh_geom_snapshot(mesh):
     mesh.vertices.foreach_get("co", co)
     return (n_vert, len(mesh.edges), len(mesh.polygons), round(sum(co), 3))
 
+def _sync_new_vertex_groups_to_source(cache_obj, src_obj):
+    """把 cache 上有而原始网格没有的顶点组，以同名空组补到原始网格。
+
+    仅在退出编辑时按组名求差集，不迁移权重（新建的是空组）；
+    原始网格已有同名组时跳过，避免覆盖原有权重。
+    返回 True 表示至少补建了一个组。
+    """
+    if cache_obj is None or src_obj is None:
+        return False
+    try:
+        if cache_obj.type != 'MESH' or src_obj.type != 'MESH':
+            return False
+        src_names = {vg.name for vg in src_obj.vertex_groups}
+        added = False
+        for vg in cache_obj.vertex_groups:
+            if vg.name not in src_names:
+                src_obj.vertex_groups.new(name=vg.name)
+                src_names.add(vg.name)
+                added = True
+        return added
+    except Exception:
+        return False
+
 class EDIT_MESH_MODIFIER_OT_Edit(bpy.types.Operator):
     bl_idname = "edit_mesh_modifier.edit"
     bl_label = "Edit"  # 编辑
@@ -761,7 +784,12 @@ class EDIT_MESH_MODIFIER_OT_Edit(bpy.types.Operator):
             if context.view_layer:
                 context.view_layer.objects.active = src
 
-        # 仅当编辑期间产生了实际几何改动时才推撤销点，避免污染撤销栈
+        # 退出编辑后：若用户在编辑中给缓存新增了顶点组，则以同名空组补到原始网格
+        groups_added = False
+        if _object_alive(cache) and _object_alive(src):
+            groups_added = _sync_new_vertex_groups_to_source(cache, src)
+
+        # 仅当编辑期间产生了实际几何改动或新增了顶点组时才推撤销点，避免污染撤销栈
         snapshot = getattr(self, '_snapshot', None)
         if snapshot is not None and _object_alive(cache):
             try:
@@ -770,7 +798,7 @@ class EDIT_MESH_MODIFIER_OT_Edit(bpy.types.Operator):
                 changed = False
         else:
             changed = False
-        if changed:
+        if changed or groups_added:
             bpy.ops.ed.undo_push(message="Exit Edit Poly")
 
         if self._timer is not None:
