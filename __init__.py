@@ -3,8 +3,8 @@
 bl_info = {
     "name": "Edit Poly Modifier [编辑多边形修改器]",  # 编辑多边形修改器
     "author": "RARA",
-    "version": (1, 0, 3),
-    "blender": (4, 5, 0),
+    "version": (1, 0, 4),
+    "blender": (4, 2, 0),
     'doc_url': 'https://space.bilibili.com/27284213',
     "location": "Properties > Modifiers Tab",  # 属性面板 > 修改器页签
     "description": "Edit the mesh via a cache object, applied in real time",  # 通过缓存物体编辑网格，并将编辑结果实时应用到原物体
@@ -183,7 +183,8 @@ def bake_cache(context, obj, cache_obj, target, hash_str=""):
         # 临时加【保存数据】节点修改器（整个流程包进 try，任何一步失败都会走 finally 清理）
         temp = obj.modifiers.new(MOD_TEMP_NAME, 'NODES')
         temp.node_group = bpy.data.node_groups[NG_SAVE]
-        temp.show_manage_panel = False
+        if hasattr(target, "show_manage_panel"): #简化面板5.0以上才有
+            temp.show_manage_panel = False
         temp.show_group_selector = False
 
         depsgraph = context.evaluated_depsgraph_get()
@@ -233,7 +234,7 @@ def backup_point_attrs(mesh):
     """编辑前把 cache_base/cache_idx/cache_pos 备份进 idx_pos_cache 字符串属性。
 
     字符串属性几乎不会被编辑操作触碰，作为关键属性的"隐形保险柜"。
-    注意：Blender 5.x 字符串属性 .value 是 bytes，需 encode/decode。
+    注意：字符串属性 .value 在 Blender 4.4+ 是 bytes，在 4.2/4.3 仍是 str，需按版本处理。
     """
     base = mesh.attributes.get(ATTR_BASE)
     idx = mesh.attributes.get(ATTR_IDX)
@@ -249,11 +250,13 @@ def backup_point_attrs(mesh):
         sa = mesh.attributes.new(ATTR_JSON, "STRING", "POINT")
     d = sa.data
     for i in range(n):
-        d[i].value = json.dumps({
+        payload = json.dumps({
             "base": bool(base.data[i].value),
             "idx": int(idx.data[i].value),
             "pos": [round(c, 6) for c in pos.data[i].vector],
-        }).encode()
+        })
+        # 4.4+ 字符串属性 .value 为 bytes；4.2/4.3 为 str
+        d[i].value = payload.encode() if bpy.app.version >= (4, 4) else payload
 
 
 def restore_point_attrs(mesh):
@@ -280,8 +283,11 @@ def restore_point_attrs(mesh):
         raw = sa.data[i].value
         if not raw:
             continue
+        # 4.4+ 为 bytes；4.2/4.3 为 str，统一转成 str 再解析
+        if isinstance(raw, bytes):
+            raw = raw.decode()
         try:
-            rec = json.loads(raw.decode())
+            rec = json.loads(raw)
         except Exception:
             continue
         if not isinstance(rec, dict):
@@ -440,7 +446,8 @@ class EDIT_MESH_MODIFIER_OT_Add(bpy.types.Operator):
 
             target = obj.modifiers.new(MOD_EDIT_NAME, 'NODES')
             target.node_group = bpy.data.node_groups[NG_EDIT]
-            target.show_manage_panel = False  # 默认关闭简化面板
+            if hasattr(target, "show_manage_panel"): #简化面板5.0以上才有
+                target.show_manage_panel = False  # 默认关闭简化面板
             target.show_group_selector = False  # 默认关闭避免用户误触，改为别的节点了
             target.show_in_editmode = False  # 默认关闭，否则编辑模式编辑原始网格时，会很怪异
 
