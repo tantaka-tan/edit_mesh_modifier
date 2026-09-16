@@ -3,7 +3,7 @@
 bl_info = {
     "name": "Edit Poly Modifier [编辑多边形修改器]",  # 编辑多边形修改器
     "author": "RARA",
-    "version": (1, 0, 15),
+    "version": (1, 0, 16),
     "blender": (4, 2, 0),
     'doc_url': 'https://github.com/tantaka-tan/edit_mesh_modifier#readme',
     "location": "Properties > Modifiers Tab",  # 属性面板 > 修改器页签
@@ -18,6 +18,7 @@ import uuid  # noqa: E402
 from . import translation as _i18n  # noqa: E402
 from . import edit_access  # noqa: E402
 from . import edit_preview  # noqa: E402
+from . import edit_session  # noqa: E402
 from .edit_access import EDIT_MESH_MODIFIER_OT_ToggleEdit  # noqa: E402
 from .shape_keys import EDIT_MESH_MODIFIER_OT_ShapeKey, EDIT_MESH_MODIFIER_MT_ShapeKey  # noqa: E402
 
@@ -686,6 +687,7 @@ class EDIT_MESH_MODIFIER_OT_Edit(bpy.types.Operator):
     _cache_symmetry_state = None
     _symmetry_started = False
     _preview_obj = None
+    _session_token = None
     _snapshot = None
     _src_hidden = None
     _src_view_layer = None
@@ -720,9 +722,11 @@ class EDIT_MESH_MODIFIER_OT_Edit(bpy.types.Operator):
         self._cache_symmetry_state = None
         self._symmetry_started = False
         self._preview_obj = None
+        self._session_token = None
 
         try:
             bpy.ops.object.mode_set(mode='OBJECT')
+            edit_session.prepare(context, src)
             self._preview_obj = edit_preview.create(context, src, cache, target)
             if self._preview_obj is not None:
                 cache = self._preview_obj
@@ -783,6 +787,9 @@ class EDIT_MESH_MODIFIER_OT_Edit(bpy.types.Operator):
             # Mesh symmetry is an editing setting, independent of appearance.
             self._cache_symmetry_state = _get_edit_symmetry(cache)
             _set_edit_symmetry(cache, _get_edit_symmetry(src))
+            edit_session.capture(self, context)
+            # Record the linked editing object before creating mesh undo steps.
+            bpy.ops.ed.undo_push(message='Enter Edit Poly')
             bpy.ops.object.mode_set(mode='EDIT')
             self._symmetry_started = True
 
@@ -802,6 +809,19 @@ class EDIT_MESH_MODIFIER_OT_Edit(bpy.types.Operator):
         
         
     def modal(self, context, event):
+        token = getattr(self, '_session_token', None)
+        if token:
+            if edit_session._paused:
+                return {'PASS_THROUGH'}
+            if event.type == 'TIMER':
+                edit_session.reconcile(context)
+                resolved = edit_session.resolve(token)
+                if resolved is None or resolved[1].get('parked'):
+                    if self._timer is not None:
+                        context.window_manager.event_timer_remove(self._timer)
+                        self._timer = None
+                    return {'FINISHED'}
+            return {'PASS_THROUGH'}
         try:
             if event.type == 'TIMER':
                 if context.mode != 'EDIT_MESH' or context.object is not self._cache_obj:
@@ -825,6 +845,16 @@ class EDIT_MESH_MODIFIER_OT_Edit(bpy.types.Operator):
         self._src_view_layer = None
 
     def _cleanup(self, context):
+        token = getattr(self, '_session_token', None)
+        if token:
+            edit_session.finish(token, context, push_undo=True)
+            if self._timer is not None:
+                context.window_manager.event_timer_remove(self._timer)
+                self._timer = None
+            return
+        EDIT_MESH_MODIFIER_OT_Edit._cleanup_data(self, context)
+
+    def _cleanup_data(self, context):
         """清理退出：回物体模式、unlink 缓存、恢复原物体为活动。"""
         # Restore before other cleanup steps, including error/cancellation paths.
         self._restore_source_visibility()
@@ -907,7 +937,7 @@ class EDIT_MESH_MODIFIER_OT_Edit(bpy.types.Operator):
         if getattr(self, '_preview_obj', None) is not None:
             self._cache_obj = None
         self._preview_obj = None
-        if changed or groups_added:
+        if (changed or groups_added) and not getattr(self, '_suppress_undo', False):
             bpy.ops.ed.undo_push(message="Exit Edit Poly")
 
         if self._timer is not None:
@@ -1206,7 +1236,7 @@ def rehash_modifier_instance(obj, mod, old_hash):
 
 def auto_rehash_duplicates(candidates):
     """对候选新增物体做哈希冲突检查，冲突则自动独立化。"""
-    if not candidates:
+    if not candidates or edit_session._paused:
         return
 
     # 建立当前场景的哈希索引（仅在新物体出现时执行，低频）
@@ -1242,7 +1272,7 @@ def auto_rehash_duplicates(candidates):
 def depsgraph_handler(scene, depsgraph):
     """依赖图句柄：只关注新增物体，避免每帧全量扫描。"""
     global _is_system_ready
-    if not _is_system_ready:
+    if not _is_system_ready or edit_session._paused:
         return
     # 确保 context 可用后再读取偏好设置
     try:
@@ -1273,8 +1303,9 @@ def depsgraph_handler(scene, depsgraph):
         return
     if candidates:
         # 用 Timer 延迟执行，避开 depsgraph 锁定状态
+        epoch = edit_session._epoch
         bpy.app.timers.register(
-            lambda: auto_rehash_duplicates(candidates),
+            lambda: auto_rehash_duplicates(candidates) if epoch == edit_session._epoch else None,
             first_interval=0.01)
 
     
@@ -1306,6 +1337,7 @@ def register():
         bpy.utils.register_class(cls)
 
     edit_access.register()
+    edit_session.register()
 
     bpy.types.OBJECT_MT_modifier_add_edit.append(modifier_add_menu_draw)
     bpy.types.OBJECT_MT_modifier_add_generate.append(modifier_add_menu_draw)
@@ -1322,6 +1354,7 @@ def register():
 
     
 def unregister():
+    edit_session.unregister()
     edit_access.unregister()
     _i18n.unregister()
 

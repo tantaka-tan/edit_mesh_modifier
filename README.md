@@ -15,6 +15,32 @@ While Edit Polygons is active, the source object is hidden in the current view
 layer. Its previous visibility is restored on exit or cancellation; render
 visibility is unchanged.
 
+## Undo/Redo recovery (1.0.16)
+
+Ctrl+ZやCtrl+Shift+Zで編集状態を戻した際に、元オブジェクトが非表示のままになったり、
+編集用メッシュの表示が残ったりする問題を修正しました。セッションの識別情報と元の
+表示設定をデータ側に保持し、Undo後のオブジェクトとView Layerを取得し直します。
+Undoで編集中に戻った場合は編集を継続し、終了状態に戻った場合は元の表示に復帰します。
+復帰処理は自動Edit Polygonsの設定がオフでも動作します。
+
+編集開始前に、編集用オブジェクトを含むUndoの区切りを作ります。通常終了にも区切りを
+作り、Undo/Redo後の復帰処理からはundo_pushを行いません。履歴の途中で必要な一時
+オブジェクトは、Redoが参照できるよう非表示・レンダー非表示で保持する場合があります。
+新しいEdit Polygonsの編集を開始すると、その一時表示を片付けます。元の編集キャッシュは
+保持されます。開始・終了だけの操作もUndoの履歴に含まれます。
+
+Session ownership and restoration settings are stored as serialized metadata,
+with UUID tokens rather than long-lived RNA references. A separate recovery
+timer handles undo-restored edit sessions even after their modal operator ends.
+Mesh-only undo can restore editing without restoring the source object's ID
+properties, so the cache retains recovery metadata as well.
+
+History recovery preserves Redo: it does not push undo steps or delete/unlink
+objects that pending mesh undo steps still reference. Such displays are parked
+invisibly and removed on the next explicit editing entry. Cache rehash callbacks
+queued before an Undo/Redo are discarded. This applies to sessions started with
+1.0.16; older undo history has no session metadata.
+
 ## Downstream modifier preview (1.0.15)
 
 Edit Polyより後ろのMirror、Subdivision Surfaceなどを、Edit Polygonsの編集中にも
@@ -181,4 +207,5 @@ Run in a separate Blender process:
 ```powershell
 blender --background --factory-startup --python-exit-code 1 --python tests/test_shape_keys.py
 blender --background --factory-startup --python-exit-code 1 --python tests/test_edit_access.py
+blender --background --factory-startup --python-exit-code 1 --python tests/test_edit_undo.py
 ```
