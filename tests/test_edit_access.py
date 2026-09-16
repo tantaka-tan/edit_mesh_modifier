@@ -440,6 +440,148 @@ class EditAccessTests(unittest.TestCase):
         self.assertEqual(bpy.context.object, self.obj)
         self.assertFalse(self.obj.hide_get())
 
+    def test_downstream_mirror_preview_updates_without_double_application(self):
+        # Put the editable cube entirely on one side of the mirror plane.
+        for vertex in self.obj.data.vertices:
+            vertex.co.x += 2
+        mod, cache = self.build()
+        mirror = self.obj.modifiers.new('Live Mirror', 'MIRROR')
+        mirror.use_axis = (True, False, False)
+        mirror.use_clip = True
+        mirror.show_in_editmode = True
+        self.obj.modifiers.active = mod
+        source_before = [tuple(v.co) for v in self.obj.data.vertices]
+        objects_before = set(bpy.data.objects)
+        mesh_count = len(bpy.data.meshes)
+        for repeat in range(2):
+            session = Session()
+            try:
+                addon.EDIT_MESH_MODIFIER_OT_Edit.execute(session, self.context)
+                preview = bpy.context.object
+                self.assertNotEqual(preview, cache)
+                self.assertEqual(preview.data, cache.data)
+                self.assertEqual(addon.edit_preview.raw_cache(preview), cache)
+                self.assertEqual(len(cache.modifiers), 0)
+                self.assertEqual(addon.get_modifier_socket_value(mod, addon.OBJ_SOCKET), cache)
+                self.assertTrue(self.obj.hide_get())
+                self.assertTrue(access.editing_cache(self.context))
+                self.assertTrue(access.EDIT_MESH_MODIFIER_OT_ToggleEdit.poll(self.context))
+                self.assertTrue(preview.modifiers['Live Mirror'].use_clip)
+                bm = bmesh.from_edit_mesh(cache.data)
+                for vertex in bm.verts:
+                    vertex.co.z += 0.25
+                bmesh.update_edit_mesh(cache.data)
+                graph = bpy.context.evaluated_depsgraph_get()
+                graph.update()
+                evaluated = preview.evaluated_get(graph)
+                mesh = evaluated.to_mesh()
+                try:
+                    self.assertEqual(len(mesh.vertices), 16)
+                    positions = {tuple(round(c, 5) for c in v.co) for v in mesh.vertices}
+                    for vertex in bm.verts:
+                        x, y, z = vertex.co
+                        self.assertIn(tuple(round(c, 5) for c in (x, y, z)), positions)
+                        self.assertIn(tuple(round(c, 5) for c in (-x, y, z)), positions)
+                finally:
+                    evaluated.to_mesh_clear()
+                # Registering a preview must not fork any real Edit Poly caches.
+                addon.auto_rehash_duplicates([preview])
+                self.assertEqual(addon.get_modifier_socket_value(mod, addon.OBJ_SOCKET), cache)
+            finally:
+                session._cleanup(self.context)
+            self.assertEqual(set(bpy.data.objects), objects_before)
+            self.assertEqual(len(bpy.data.meshes), mesh_count)
+            self.assertEqual(bpy.context.object, self.obj)
+            self.assertEqual([tuple(v.co) for v in self.obj.data.vertices], source_before)
+            evaluated = self.obj.evaluated_get(bpy.context.evaluated_depsgraph_get())
+            mesh = evaluated.to_mesh()
+            try:
+                self.assertEqual(len(mesh.vertices), 16)
+                self.assertEqual({tuple(round(c, 5) for c in v.co) for v in mesh.vertices}, positions)
+            finally:
+                evaluated.to_mesh_clear()
+
+    def test_preview_respects_stack_order_and_visibility(self):
+        upstream = self.obj.modifiers.new('Already baked', 'MIRROR')
+        mod, cache = self.build()
+        first = self.obj.modifiers.new('Mirror after edit', 'MIRROR')
+        second = self.obj.modifiers.new('Subsurf after mirror', 'SUBSURF')
+        first.show_in_editmode = second.show_in_editmode = True
+        second.show_viewport = False
+        self.obj.modifiers.active = mod
+        session = Session()
+        try:
+            addon.EDIT_MESH_MODIFIER_OT_Edit.execute(session, self.context)
+            preview = bpy.context.object
+            self.assertEqual([m.name for m in preview.modifiers], [first.name, second.name])
+            self.assertFalse(preview.modifiers[second.name].show_viewport)
+            self.assertTrue(preview.modifiers[first.name].show_in_editmode)
+        finally:
+            addon.EDIT_MESH_MODIFIER_OT_Edit.cancel(session, self.context)
+        first.show_viewport = False
+        session = Session()
+        try:
+            addon.EDIT_MESH_MODIFIER_OT_Edit.execute(session, self.context)
+            self.assertEqual(bpy.context.object, cache)
+        finally:
+            session._cleanup(self.context)
+
+        first.show_viewport = True
+        first.show_in_editmode = False
+        session = Session()
+        try:
+            addon.EDIT_MESH_MODIFIER_OT_Edit.execute(session, self.context)
+            self.assertEqual(bpy.context.object, cache)
+        finally:
+            session._cleanup(self.context)
+
+    def test_downstream_edit_poly_preview_does_not_rehash_real_caches(self):
+        first, first_cache = self.build()
+        second, second_cache = self.build()
+        second.show_in_editmode = True
+        mirror = self.obj.modifiers.new('Mirror', 'MIRROR')
+        mirror.show_in_editmode = True
+        self.obj.modifiers.active = first
+        objects_before = set(bpy.data.objects)
+        hashes = [addon.get_modifier_socket_value(m, addon.HASH_SOCKET) for m in (first, second)]
+        session = Session()
+        try:
+            addon.EDIT_MESH_MODIFIER_OT_Edit.execute(session, self.context)
+            preview = bpy.context.object
+            self.assertEqual([m.type for m in preview.modifiers], ['NODES', 'MIRROR'])
+            self.assertEqual(addon.get_modifier_socket_value(preview.modifiers[0], addon.OBJ_SOCKET), second_cache)
+            addon.auto_rehash_duplicates([preview])
+            addon.auto_rehash_duplicates([self.obj])
+            self.assertEqual([addon.get_modifier_socket_value(m, addon.HASH_SOCKET) for m in (first, second)], hashes)
+            self.assertEqual(addon.get_modifier_socket_value(first, addon.OBJ_SOCKET), first_cache)
+            self.assertEqual(addon.get_modifier_socket_value(second, addon.OBJ_SOCKET), second_cache)
+            self.assertEqual(len(bpy.data.objects), len(objects_before) + 1)
+        finally:
+            session._cleanup(self.context)
+        self.assertEqual(set(bpy.data.objects), objects_before)
+
+    def test_preview_is_removed_when_entry_fails(self):
+        mod, cache = self.build()
+        mirror = self.obj.modifiers.new('Mirror', 'MIRROR')
+        mirror.show_in_editmode = True
+        self.obj.modifiers.active = mod
+        objects_before = set(bpy.data.objects)
+        session = Session()
+        session.report = mock.Mock()
+        before_source = addon._get_edit_symmetry(self.obj)
+
+        def mode_set(*, mode):
+            if mode == 'EDIT':
+                raise RuntimeError('Simulated edit entry failure')
+            return bpy.ops.object.mode_set(mode=mode)
+
+        with mock.patch.object(addon, 'bpy', SimpleNamespace(
+                ops=SimpleNamespace(object=SimpleNamespace(mode_set=mode_set)), data=bpy.data)):
+            self.assertEqual(addon.EDIT_MESH_MODIFIER_OT_Edit.execute(session, self.context), {'CANCELLED'})
+        self.assertEqual(set(bpy.data.objects), objects_before)
+        self.assertEqual(addon._get_edit_symmetry(self.obj), before_source)
+        self.assertEqual(bpy.context.object, self.obj)
+        self.assertFalse(self.obj.hide_get())
     def test_legacy_appearance_forces_retopology_then_restores_it(self):
         mod, cache = self.build()
         space = bpy.context.area.spaces.active

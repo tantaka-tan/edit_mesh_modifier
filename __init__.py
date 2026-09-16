@@ -3,7 +3,7 @@
 bl_info = {
     "name": "Edit Poly Modifier [编辑多边形修改器]",  # 编辑多边形修改器
     "author": "RARA",
-    "version": (1, 0, 14),
+    "version": (1, 0, 15),
     "blender": (4, 2, 0),
     'doc_url': 'https://github.com/tantaka-tan/edit_mesh_modifier#readme',
     "location": "Properties > Modifiers Tab",  # 属性面板 > 修改器页签
@@ -17,6 +17,7 @@ import bpy  # noqa: E402
 import uuid  # noqa: E402
 from . import translation as _i18n  # noqa: E402
 from . import edit_access  # noqa: E402
+from . import edit_preview  # noqa: E402
 from .edit_access import EDIT_MESH_MODIFIER_OT_ToggleEdit  # noqa: E402
 from .shape_keys import EDIT_MESH_MODIFIER_OT_ShapeKey, EDIT_MESH_MODIFIER_MT_ShapeKey  # noqa: E402
 
@@ -684,6 +685,7 @@ class EDIT_MESH_MODIFIER_OT_Edit(bpy.types.Operator):
     _cache_display_state = None
     _cache_symmetry_state = None
     _symmetry_started = False
+    _preview_obj = None
     _snapshot = None
     _src_hidden = None
     _src_view_layer = None
@@ -717,8 +719,14 @@ class EDIT_MESH_MODIFIER_OT_Edit(bpy.types.Operator):
         self._cache_display_state = None
         self._cache_symmetry_state = None
         self._symmetry_started = False
+        self._preview_obj = None
 
         try:
+            bpy.ops.object.mode_set(mode='OBJECT')
+            self._preview_obj = edit_preview.create(context, src, cache, target)
+            if self._preview_obj is not None:
+                cache = self._preview_obj
+                self._cache_obj = cache
             entry = context.preferences.addons.get(__name__)
             standard_appearance = entry is None or entry.preferences.standard_edit_appearance
             if standard_appearance:
@@ -734,7 +742,6 @@ class EDIT_MESH_MODIFIER_OT_Edit(bpy.types.Operator):
                     self._overlay_states.append((sp, sp.overlay.show_retopology))
                     sp.overlay.show_retopology = True
 
-            bpy.ops.object.mode_set(mode='OBJECT')
             for coll in list(cache.users_collection):
                 coll.objects.unlink(cache)
             if context.scene:
@@ -883,6 +890,9 @@ class EDIT_MESH_MODIFIER_OT_Edit(bpy.types.Operator):
         groups_added = False
         if _object_alive(cache) and _object_alive(src):
             groups_added = _sync_new_vertex_groups_to_source(cache, src)
+            raw = edit_preview.raw_cache(cache)
+            if raw is not None:
+                _sync_new_vertex_groups_to_source(cache, raw)
 
         # 仅当编辑期间产生了实际几何改动或新增了顶点组时才推撤销点，避免污染撤销栈
         snapshot = getattr(self, '_snapshot', None)
@@ -893,6 +903,10 @@ class EDIT_MESH_MODIFIER_OT_Edit(bpy.types.Operator):
                 changed = False
         else:
             changed = False
+        edit_preview.remove(getattr(self, '_preview_obj', None))
+        if getattr(self, '_preview_obj', None) is not None:
+            self._cache_obj = None
+        self._preview_obj = None
         if changed or groups_added:
             bpy.ops.ed.undo_push(message="Exit Edit Poly")
 
@@ -1198,7 +1212,7 @@ def auto_rehash_duplicates(candidates):
     # 建立当前场景的哈希索引（仅在新物体出现时执行，低频）
     seen_hashes = {}
     for obj in bpy.context.view_layer.objects:
-        if obj.type != 'MESH':
+        if obj.type != 'MESH' or edit_preview.is_preview(obj):
             continue
         for mod in obj.modifiers:
             if mod.type == 'NODES' and mod.node_group and mod.node_group.name == NG_EDIT:
@@ -1209,7 +1223,7 @@ def auto_rehash_duplicates(candidates):
     # 逐个检查候选，仅处理哈希冲突的副本
     for obj in candidates:
         try:
-            if obj.name not in bpy.data.objects or obj.type != 'MESH':
+            if obj.name not in bpy.data.objects or obj.type != 'MESH' or edit_preview.is_preview(obj):
                 continue
         except ReferenceError:
             continue
@@ -1247,7 +1261,7 @@ def depsgraph_handler(scene, depsgraph):
             if not isinstance(id_data, bpy.types.Object):
                 continue
             obj = getattr(id_data, "original", id_data)
-            if obj is None or obj.type != 'MESH':
+            if obj is None or obj.type != 'MESH' or edit_preview.is_preview(obj):
                 continue
             ptr = obj.as_pointer()
             if ptr in seen_ptrs:

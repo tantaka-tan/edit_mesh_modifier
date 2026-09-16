@@ -143,11 +143,12 @@ def editing_cache(context):
     if context.mode != 'EDIT_MESH' or obj is None:
         return False
     addon = _addon()
+    cache_obj = addon.edit_preview.raw_cache(obj) or obj
     for source in bpy.data.objects:
         for mod in source.modifiers:
             if (mod.type == 'NODES' and mod.node_group
                     and mod.node_group.name == addon.NG_EDIT
-                    and addon.get_modifier_socket_value(mod, addon.OBJ_SOCKET) == obj):
+                    and addon.get_modifier_socket_value(mod, addon.OBJ_SOCKET) == cache_obj):
                 return True
     return False
 

@@ -15,6 +15,31 @@ While Edit Polygons is active, the source object is hidden in the current view
 layer. Its previous visibility is restored on exit or cancellation; render
 visibility is unchanged.
 
+## Downstream modifier preview (1.0.15)
+
+Edit Polyより後ろのMirror、Subdivision Surfaceなどを、Edit Polygonsの編集中にも
+プレビューします。表示したいモディファイアの「ビューポートに表示」と
+「編集モードで表示」をオンにしてください。前段のモディファイアはキャッシュに
+含まれているため、重ねて適用しません。
+
+編集用の一時オブジェクトがキャッシュのメッシュデータを共有し、その上で後段の
+モディファイアを評価します。頂点を動かすとミラー側もリアルタイムで更新されます。
+終了・キャンセル・開始失敗時に一時オブジェクトを削除します。
+モディファイア設定は編集開始時にコピーします。永続的な設定変更は元オブジェクト側で
+行い、Edit Polygonsへ入り直してください。
+
+The editable preview shares the raw cache mesh and copies the downstream stack
+using Blender's native modifier copy operation. The original Edit Poly still
+references the unmodified cache object, avoiding double evaluation of Mirror or
+other generators. Viewport, Edit Mode and cage flags are preserved. Preview
+objects are excluded from automatic cache duplication.
+
+This follows Blender's native Edit Mode modifier support. Simulation/binding
+caches, object-dependent Geometry Nodes and modifiers that cannot be copied or
+displayed in Edit Mode may not reproduce the Object Mode result. Modifier
+settings on the temporary preview are session-only; edit the source stack for
+persistent changes. This feature does not add topology-change protection.
+
 ## Edit symmetry (1.0.14)
 
 Edit Polygonsの開始時に、元メッシュのX・Y・Z対称編集とトポロジーミラーの設定を
