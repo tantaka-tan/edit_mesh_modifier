@@ -54,6 +54,10 @@ def _redirect_edit_entry(context, previous, current):
             or not addon._is_system_ready):
         return False
     mod = addon.get_target_modifier(source)
+    # A bypassed viewport stage must not redirect ordinary source editing.
+    # Render visibility is independent of the interactive editing target.
+    if mod is None or not mod.show_viewport:
+        return False
     cache = addon.get_modifier_socket_value(mod, addon.OBJ_SOCKET) if mod else None
     if cache is None or cache.type != 'MESH' or cache == source:
         return False

@@ -15,6 +15,18 @@ While Edit Polygons is active, the source object is hidden in the current view
 layer. Its previous visibility is restored on exit or cancellation; render
 visibility is unchanged.
 
+## Disabled viewport modifiers (1.0.13)
+
+Edit Polyのビューポート表示（モニターアイコン）がオフの場合、Tabや通常の
+モード切替からは元メッシュの編集モードに入ります。別の有効なEdit Polyへ
+自動で切り替えることもありません。オンに戻した場合は、次に編集モードへ
+入るときから自動Edit Polygonsが再開します。レンダー表示のオン・オフは影響しません。
+
+Automatic Edit Polygons entry skips the selected stage when its viewport display
+is disabled. Re-enabling it takes effect on the next Edit Mode entry; render
+visibility does not affect this decision. Explicit Edit Polygons commands remain
+available. Version 1.0.12 is reserved for the archived topology protection experiment.
+
 ## Edit Mode appearance (1.0.11)
 
 **プリファレンス → アドオン → Edit Poly Modifier → 編集モードへのアクセス** に

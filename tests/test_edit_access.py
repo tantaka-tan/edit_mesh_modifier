@@ -208,6 +208,54 @@ class EditAccessTests(unittest.TestCase):
             access._auto_edit_tick()
             operation.assert_called_once_with('INVOKE_DEFAULT')
 
+    def test_disabled_viewport_stage_keeps_source_editing(self):
+        self.build()  # An enabled earlier stage must not become the edit target.
+        mod, cache = self.build()
+        mod.show_viewport = False
+        operation = mock.Mock()
+        for render in (True, False):
+            with self.subTest(render=render), self.auto_operator(operation):
+                mod.show_render = render
+                access._auto_edit_tick()
+                bpy.ops.object.mode_set(mode='EDIT')
+                access._auto_edit_tick()
+                access._auto_edit_tick()
+                operation.assert_not_called()
+                self.assertEqual(bpy.context.object, self.obj)
+                self.assertEqual(self.obj.mode, 'EDIT')
+                self.assertFalse(self.obj.hide_get())
+                self.assertEqual(len(cache.users_collection), 0)
+                self.assertFalse(mod.show_viewport)
+                bpy.ops.object.mode_set(mode='OBJECT')
+
+    def test_reenabled_viewport_stage_redirects_on_next_entry(self):
+        mod, cache = self.build()
+        mod.show_viewport = False
+        mod.show_render = False
+        session = Session()
+        operation = mock.Mock(side_effect=lambda *args:
+                              addon.EDIT_MESH_MODIFIER_OT_Edit.execute(session, self.context))
+        try:
+            with self.auto_operator(operation):
+                access._auto_edit_tick()
+                bpy.ops.object.mode_set(mode='EDIT')
+                access._auto_edit_tick()
+                mod.show_viewport = True
+                access._auto_edit_tick()
+                operation.assert_not_called()
+                self.assertEqual(bpy.context.object, self.obj)
+                bpy.ops.object.mode_set(mode='OBJECT')
+                access._auto_edit_tick()
+                bpy.ops.object.mode_set(mode='EDIT')
+                access._auto_edit_tick()
+                operation.assert_called_once_with('INVOKE_DEFAULT')
+                self.assertEqual(bpy.context.object, cache)
+                self.assertTrue(self.obj.hide_get())
+                self.assertFalse(mod.show_render)
+        finally:
+            if bpy.context.object == cache:
+                session._cleanup(self.context)
+
     def test_auto_ignores_other_modifiers_and_missing_caches(self):
         mod, cache = self.build()
         native = self.obj.modifiers.new('Other', 'SUBSURF')
