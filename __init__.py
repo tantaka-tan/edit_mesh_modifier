@@ -3,7 +3,7 @@
 bl_info = {
     "name": "Edit Poly Modifier [编辑多边形修改器]",  # 编辑多边形修改器
     "author": "RARA",
-    "version": (1, 0, 12),
+    "version": (1, 0, 11),
     "blender": (4, 2, 0),
     'doc_url': 'https://github.com/tantaka-tan/edit_mesh_modifier#readme',
     "location": "Properties > Modifiers Tab",  # 属性面板 > 修改器页签
@@ -17,7 +17,6 @@ import bpy  # noqa: E402
 import uuid  # noqa: E402
 from . import translation as _i18n  # noqa: E402
 from . import edit_access  # noqa: E402
-from . import topology_guard  # noqa: E402
 from .edit_access import EDIT_MESH_MODIFIER_OT_ToggleEdit  # noqa: E402
 from .shape_keys import EDIT_MESH_MODIFIER_OT_ShapeKey, EDIT_MESH_MODIFIER_MT_ShapeKey  # noqa: E402
 
@@ -59,9 +58,6 @@ def _load_lib_node_groups(names):
         return False
     with bpy.data.libraries.load(LIB_PATH, link=False) as (data_from, data_to):
         data_to.node_groups = [n for n in data_from.node_groups if n in names]
-    for name in names:
-        if name == NG_EDIT and name in bpy.data.node_groups:
-            topology_guard.install_nodes(bpy.data.node_groups[name])
     return True
 
 
@@ -171,7 +167,6 @@ def generate_unique_hash(obj):
 
 def bake_cache(context, obj, cache_obj, target, hash_str=""):
     """屏蔽目标及下游修改器，临时加【保存数据】节点烘焙后写入缓存物体。"""
-    topology_guard.ensure_origin_ids(obj)
     # 清理可能残留的临时【保存数据】修改器
     for m in list(obj.modifiers):
         if m.type == 'NODES' and m.node_group and m.node_group.name == NG_SAVE:
@@ -209,7 +204,6 @@ def bake_cache(context, obj, cache_obj, target, hash_str=""):
                 # shape keys may have the pre-modifier topology and deform it again.
                 if new.shape_keys is not None:
                     cache_obj.shape_key_clear()
-                topology_guard.bind_mesh(target, new)
                 if old is not new:
                     try:
                         if old.users <= 1:
@@ -328,9 +322,6 @@ def restore_point_attrs(mesh):
 
 def sync_upstream_to_cache(context, obj, cache_obj, target):
     """在上游顶点位置变化时，同步更新缓存物体，保留已有的编辑偏移。"""
-    error = topology_guard.check_input(context, obj, target)
-    if error:
-        return False, topology_guard.paused_message(error)
     # 1. 获取上游最新网格（禁用目标及下游修改器）
     t_index = obj.modifiers.find(target.name)
     if t_index == -1:
@@ -701,11 +692,6 @@ class EDIT_MESH_MODIFIER_OT_Edit(bpy.types.Operator):
             self.report({'ERROR'}, _i18n.pget_tmpl("The modifier has no valid cache object. Run Build first"))  # 修改器未记录有效的缓存物体，请先执行【构建】
             return {'CANCELLED'}
 
-        error = topology_guard.check_input(context, src, target)
-        if error:
-            self.report({'WARNING'}, topology_guard.paused_message(error))
-            return {'CANCELLED'}
-
         self._src_obj = src
         self._cache_obj = cache
         self._src_hidden = None
@@ -839,8 +825,6 @@ class EDIT_MESH_MODIFIER_OT_Edit(bpy.types.Operator):
             # 退出编辑后从字符串备份恢复关键点属性（尽力而为）
             try:
                 restore_point_attrs(cache.data)
-                if topology_guard.ORIGIN_ID in cache.data.attributes:
-                    topology_guard.ensure_origin_ids(cache)
             except Exception:
                 pass
             for coll in list(cache.users_collection):
@@ -1018,7 +1002,6 @@ class EDIT_MESH_MODIFIER_PT_Main(bpy.types.Panel):
             socket_icon = 'UV_SYNC_SELECT' if get_modifier_socket_value(mod, AUTO_FIX_SOCKET) else 'FREEZE'
             draw_socket_input(row, mod, AUTO_FIX_SOCKET, text="Auto Position Fix", icon=socket_icon)  # 位置自动修正
             col.menu("EDIT_MESH_MODIFIER_MT_ShapeKey", text="Shape Keys", icon='SHAPEKEY_DATA')
-            topology_guard.draw(col, context, mod)
         else:
             col.label(text="Note: buttons are only visible when an Edit Poly modifier is selected",icon="QUESTION")  # 注意，按钮仅当选中【编辑多边形修改器】后可见
             
@@ -1263,8 +1246,6 @@ CLASSES = (
     EDIT_MESH_MODIFIER_OT_Build,
     EDIT_MESH_MODIFIER_OT_Edit,
     EDIT_MESH_MODIFIER_OT_ToggleEdit,
-    topology_guard.EDIT_MESH_MODIFIER_OT_ProtectTopology,
-    topology_guard.EDIT_MESH_MODIFIER_OT_CheckTopology,
     EDIT_MESH_MODIFIER_OT_ShapeKey,
     EDIT_MESH_MODIFIER_MT_ShapeKey,
     EDIT_MESH_MODIFIER_PT_Main,

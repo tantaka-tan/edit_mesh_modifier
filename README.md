@@ -15,43 +15,6 @@ While Edit Polygons is active, the source object is hidden in the current view
 layer. Its previous visibility is restored on exit or cancellation; render
 visibility is unchanged.
 
-## Topology protection trial (1.0.12)
-
-**トポロジー保護（試験版）**を追加しました。入力の頂点識別情報、頂点・辺・面の数、
-番号順の接続を基準と比較し、不一致ならそのEdit Polyを一時停止して入力を素通しに
-します。基準と一致する構成に戻すと編集が復帰します。再投影は行いません。
-判定はGeometry Nodes内で評価ごとに行い、モディファイアーの表示スイッチは変更しません。
-
-- **新しく作成・再構築したEdit Poly**：その時点の入力を基準に保護を有効化します。
-- **既存のEdit Poly**：正常な上流構成に戻し、専用パネルの **保護基準を登録** を押してください。
-  頂点位置は保持しますが、識別用の内部属性を追加します。既に壊れた対応を修復する操作ではありません。
-- **入力の互換性を確認**：有効か一時停止中かと、その理由を表示します。
-- **トポロジー保護を有効化**：段ごとにオフにして従来の動作へ戻せます。
-
-一時停止中はキャッシュへの編集開始・上流同期、およびその段を含むシェイプキー変換も
-中断し、編集データを守ります。上流の頂点位置だけを変える変形は引き続き追従します。
-動作例は `dist/topology-protection-demo.blend`（Blender 5.2用）の **Toggle this Subdivision** を
-オン・オフして確認できます（デモ生成スクリプトは `tests/create_topology_demo.py`）。
-
-**試験版の範囲**：Subdivision、Mirror、Array、Geometry Nodesの頂点ソートをテストしています。
-識別属性を失うRemeshや独自ノードなどでは、正常に見える入力でも一時停止する場合があります。
-識別情報の複製・再生成によって番号順と接続まで同じになった場合は区別できず、あらゆる
-モディファイアーへの完全な対応保証ではありません。構造が同じでも属性だけの変更は検査しません。
-また各段に基準メッシュを保持するため、メモリー使用量と評価コストが増えます。
-
-The experimental guard stores an independent upstream reference per stage. It
-compares counts, ordered origin IDs, edge endpoints and polygon corner mappings
-inside Geometry Nodes, then passes the input through on mismatch. It works
-without a Python polling timer, including when the add-on is disabled. Cache
-coordinates and modifier visibility flags are preserved. New/Rebuilt stages bind
-automatically; legacy stages require explicit registration in a known-good state.
-An internal `.edit_poly_origin_id` point attribute is added to the source mesh.
-Zero/missing IDs conservatively pause evaluation. Topology-generating operations
-may duplicate/interpolate IDs, so this is not a universal persistent-ID system.
-Equal IDs and equal indexed topology cannot distinguish all semantic changes.
-The baseline is the viewport input at registration; a different render topology
-also pauses the stage. Disable protection explicitly to use legacy behavior.
-
 ## Edit Mode appearance (1.0.11)
 
 **プリファレンス → アドオン → Edit Poly Modifier → 編集モードへのアクセス** に
@@ -165,5 +128,4 @@ Run in a separate Blender process:
 ```powershell
 blender --background --factory-startup --python-exit-code 1 --python tests/test_shape_keys.py
 blender --background --factory-startup --python-exit-code 1 --python tests/test_edit_access.py
-blender --background --factory-startup --python-exit-code 1 --python tests/test_topology_guard.py
 ```

@@ -1,12 +1,3 @@
-V1.0.12 Update Notes (Topology Protection Trial)
-
-- Add per-stage experimental protection based on stored upstream counts, origin IDs and ordered connectivity.
-- Bypass an incompatible stage synchronously in Geometry Nodes and resume when its input matches again; preserve cache edits and user visibility flags.
-- Automatically protect newly built stages; add explicit reference registration and compatibility checks for existing stages.
-- Stop cache entry, synchronization and shape-key export on a detected mismatch.
-- Add integration tests for topology-changing toggles, same-count reorder, loose vertices, chained stages, restoration and missing references.
-- Include a reproducible demo generator. This trial is conservative and does not guarantee identity across every topology-generating operation.
-
 V1.0.11 Update Notes
 
 - Add Use Standard Edit Mode Appearance, enabled by default, for all Edit Polygons entry points.
