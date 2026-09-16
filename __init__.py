@@ -3,7 +3,7 @@
 bl_info = {
     "name": "Edit Poly Modifier [编辑多边形修改器]",  # 编辑多边形修改器
     "author": "RARA",
-    "version": (1, 0, 13),
+    "version": (1, 0, 14),
     "blender": (4, 2, 0),
     'doc_url': 'https://github.com/tantaka-tan/edit_mesh_modifier#readme',
     "location": "Properties > Modifiers Tab",  # 属性面板 > 修改器页签
@@ -659,6 +659,18 @@ def _sync_new_vertex_groups_to_source(cache_obj, src_obj):
     except Exception:
         return False
 
+_EDIT_SYMMETRY_PROPERTIES = ('use_mirror_x', 'use_mirror_y', 'use_mirror_z', 'use_mirror_topology')
+
+
+def _get_edit_symmetry(obj):
+    return {name: getattr(obj.data, name) for name in _EDIT_SYMMETRY_PROPERTIES}
+
+
+def _set_edit_symmetry(obj, settings):
+    for name, value in settings.items():
+        setattr(obj.data, name, value)
+
+
 class EDIT_MESH_MODIFIER_OT_Edit(bpy.types.Operator):
     bl_idname = "edit_mesh_modifier.edit"
     bl_label = "Edit"  # 编辑
@@ -670,6 +682,8 @@ class EDIT_MESH_MODIFIER_OT_Edit(bpy.types.Operator):
     _cache_obj = None
     _overlay_states = []
     _cache_display_state = None
+    _cache_symmetry_state = None
+    _symmetry_started = False
     _snapshot = None
     _src_hidden = None
     _src_view_layer = None
@@ -701,6 +715,8 @@ class EDIT_MESH_MODIFIER_OT_Edit(bpy.types.Operator):
         # Standard appearance preserves the user's existing viewport settings.
         self._overlay_states = []
         self._cache_display_state = None
+        self._cache_symmetry_state = None
+        self._symmetry_started = False
 
         try:
             entry = context.preferences.addons.get(__name__)
@@ -757,7 +773,11 @@ class EDIT_MESH_MODIFIER_OT_Edit(bpy.types.Operator):
             # Hide only in the editing view layer; keep render visibility intact.
             self._src_hidden = src.hide_get(view_layer=self._src_view_layer)
             src.hide_set(True, view_layer=self._src_view_layer)
+            # Mesh symmetry is an editing setting, independent of appearance.
+            self._cache_symmetry_state = _get_edit_symmetry(cache)
+            _set_edit_symmetry(cache, _get_edit_symmetry(src))
             bpy.ops.object.mode_set(mode='EDIT')
+            self._symmetry_started = True
 
             wm = context.window_manager
             if context.window:
@@ -814,6 +834,18 @@ class EDIT_MESH_MODIFIER_OT_Edit(bpy.types.Operator):
         self._overlay_states = []
 
         cache = self._cache_obj
+        if _object_alive(cache):
+            try:
+                if getattr(self, '_symmetry_started', False) and _object_alive(self._src_obj):
+                    # Keep header/Topology Mirror changes for normal editing and
+                    # the next Edit Poly stage, without copying mesh geometry.
+                    _set_edit_symmetry(self._src_obj, _get_edit_symmetry(cache))
+                elif getattr(self, '_cache_symmetry_state', None) is not None:
+                    _set_edit_symmetry(cache, self._cache_symmetry_state)
+            except (ReferenceError, RuntimeError):
+                pass
+        self._cache_symmetry_state = None
+        self._symmetry_started = False
         if _object_alive(cache) and self._cache_display_state is not None:
             for name, value in self._cache_display_state.items():
                 try:

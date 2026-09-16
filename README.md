@@ -15,6 +15,22 @@ While Edit Polygons is active, the source object is hidden in the current view
 layer. Its previous visibility is restored on exit or cancellation; render
 visibility is unchanged.
 
+## Edit symmetry (1.0.14)
+
+Edit Polygonsの開始時に、元メッシュのX・Y・Z対称編集とトポロジーミラーの設定を
+編集用メッシュへ引き継ぎます。編集中は標準ヘッダーのX・Y・Zボタンと
+オプションのトポロジーミラーを使えます。終了時には変更した設定を元メッシュへ戻し、
+次回や別のEdit Polyの編集にも引き継ぎます。表示設定のプリファレンスとは独立しています。
+
+Edit Polygons inherits the source mesh's X/Y/Z symmetry and Topology Mirror
+settings. Changes made during editing persist back to the source on exit and
+carry into the next selected stage. Failed entry restores the cache's previous
+settings. Geometry is not copied back to the source.
+
+This uses Blender's native edit symmetry: matching vertices must already exist
+across the object's local axes. It does not generate a missing half or repair
+asymmetric geometry. See [Blender's symmetry tool settings](https://docs.blender.org/manual/en/5.2/modeling/meshes/tools/tool_settings.html).
+
 ## Disabled viewport modifiers (1.0.13)
 
 Edit Polyのビューポート表示（モニターアイコン）がオフの場合、Tabや通常の

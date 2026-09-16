@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import bpy
+import bmesh
 try:
     from _bpy_restrict_state import RestrictBlend
 except ImportError:
@@ -337,6 +338,107 @@ class EditAccessTests(unittest.TestCase):
                 self.assertEqual((cache.show_in_front, cache.show_wire, cache.show_all_edges), before_flags)
                 self.assertEqual(space.overlay.show_retopology, retopology)
         space.overlay.show_retopology = original_retopology
+
+    def test_symmetry_transforms_mirrored_vertices_on_all_axes(self):
+        # Exercise Blender's actual transform, not just copied flags.
+        for axes in ((), (0,), (1,), (2,), (0, 1), (0, 2), (1, 2), (0, 1, 2)):
+            with self.subTest(axes=axes):
+                self.setUp()
+                mod, cache = self.build()
+                before_source = [tuple(v.co) for v in self.obj.data.vertices]
+                for i, axis in enumerate('xyz'):
+                    setattr(self.obj, 'use_mesh_mirror_' + axis, i in axes)
+                session = Session()
+                try:
+                    addon.EDIT_MESH_MODIFIER_OT_Edit.execute(session, self.context)
+                    bpy.ops.mesh.select_mode(type='VERT')
+                    bpy.ops.mesh.select_all(action='DESELECT')
+                    bm = bmesh.from_edit_mesh(cache.data)
+                    before = {v.index: v.co.copy() for v in bm.verts}
+                    selected = next(v for v in bm.verts if all(c > 0 for c in v.co))
+                    selected.select_set(True)
+                    bm.select_history.add(selected)
+                    bmesh.update_edit_mesh(cache.data)
+                    delta = (0.2, 0.3, 0.4)
+                    # EXEC_DEFAULT needs mirror=True; interactive G enables it.
+                    bpy.ops.transform.translate(value=delta, orient_type='LOCAL',
+                                                mirror=True, use_proportional_edit=False)
+                    for v in bm.verts:
+                        original = before[v.index]
+                        affected = all(original[i] > 0 for i in range(3) if i not in axes)
+                        for i in range(3):
+                            expected = original[i]
+                            if affected:
+                                expected += delta[i] * (-1 if i in axes and original[i] < 0 else 1)
+                            self.assertAlmostEqual(v.co[i], expected, places=5)
+                finally:
+                    session._cleanup(self.context)
+                self.assertEqual([tuple(v.co) for v in self.obj.data.vertices], before_source)
+                evaluated = self.obj.evaluated_get(bpy.context.evaluated_depsgraph_get())
+                mesh = evaluated.to_mesh()
+                try:
+                    self.assertEqual(len(mesh.vertices), len(cache.data.vertices))
+                    for result, edited in zip(mesh.vertices, cache.data.vertices):
+                        self.assertLess((result.co - edited.co).length, 1e-5)
+                finally:
+                    evaluated.to_mesh_clear()
+
+    def test_symmetry_changes_persist_across_stages_and_appearances(self):
+        first, first_cache = self.build()
+        second, second_cache = self.build()
+        for standard in (True, False):
+            with self.subTest(standard=standard):
+                self.context.preferences = SimpleNamespace(addons={
+                    'edit_mesh_modifier': SimpleNamespace(preferences=SimpleNamespace(
+                        standard_edit_appearance=standard))})
+                self.obj.modifiers.active = first
+                self.obj.use_mesh_mirror_x = True
+                self.obj.data.use_mirror_topology = True
+                session = Session()
+                try:
+                    addon.EDIT_MESH_MODIFIER_OT_Edit.execute(session, self.context)
+                    self.assertTrue(first_cache.use_mesh_mirror_x)
+                    self.assertTrue(first_cache.data.use_mirror_topology)
+                    first_cache.use_mesh_mirror_x = False
+                    first_cache.use_mesh_mirror_y = True
+                    first_cache.use_mesh_mirror_z = True
+                    first_cache.data.use_mirror_topology = False
+                finally:
+                    session._cleanup(self.context)
+                self.assertFalse(self.obj.use_mesh_mirror_x)
+                self.assertTrue(self.obj.use_mesh_mirror_y and self.obj.use_mesh_mirror_z)
+                self.assertFalse(self.obj.data.use_mirror_topology)
+                self.obj.modifiers.active = second
+                session = Session()
+                try:
+                    addon.EDIT_MESH_MODIFIER_OT_Edit.execute(session, self.context)
+                    self.assertFalse(second_cache.use_mesh_mirror_x)
+                    self.assertTrue(second_cache.use_mesh_mirror_y and second_cache.use_mesh_mirror_z)
+                    self.assertFalse(second_cache.data.use_mirror_topology)
+                finally:
+                    addon.EDIT_MESH_MODIFIER_OT_Edit.cancel(session, self.context)
+
+    def test_failed_entry_restores_cache_symmetry(self):
+        mod, cache = self.build()
+        self.obj.use_mesh_mirror_x = True
+        self.obj.data.use_mirror_topology = True
+        before_source = addon._get_edit_symmetry(self.obj)
+        before_cache = addon._get_edit_symmetry(cache)
+        session = Session()
+        session.report = mock.Mock()
+
+        def mode_set(*, mode):
+            if mode == 'EDIT':
+                raise RuntimeError('Simulated edit entry failure')
+            return bpy.ops.object.mode_set(mode=mode)
+
+        with mock.patch.object(addon, 'bpy', SimpleNamespace(
+                ops=SimpleNamespace(object=SimpleNamespace(mode_set=mode_set)), data=bpy.data)):
+            self.assertEqual(addon.EDIT_MESH_MODIFIER_OT_Edit.execute(session, self.context), {'CANCELLED'})
+        self.assertEqual(addon._get_edit_symmetry(self.obj), before_source)
+        self.assertEqual(addon._get_edit_symmetry(cache), before_cache)
+        self.assertEqual(bpy.context.object, self.obj)
+        self.assertFalse(self.obj.hide_get())
 
     def test_legacy_appearance_forces_retopology_then_restores_it(self):
         mod, cache = self.build()
