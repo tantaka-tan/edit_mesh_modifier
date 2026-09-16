@@ -15,7 +15,23 @@ While Edit Polygons is active, the source object is hidden in the current view
 layer. Its previous visibility is restored on exit or cancellation; render
 visibility is unchanged.
 
-## Mode pie and shortcut (1.0.9)
+## Automatic Edit Polygons, mode pie and shortcut (1.0.10)
+
+**Edit Poly** をモディファイアータブで選択した状態で **Tab**、またはモード選択
+メニューから編集モードに入ると、自動的に **Edit Polygons** の編集を開始します。
+複数段ある場合は選択中の段を対象とし、編集中は元オブジェクトを非表示にします。
+**Tab** で終了すると元オブジェクトへ戻ります。
+
+**プリファレンス → アドオン → Edit Poly Modifier → 編集モードへのアクセス**
+に、次の独立した設定があります。初期状態は両方オンです。
+
+- **モード切替パイにEdit Polyを表示**：標準パイへの専用項目の追加を切り替えます。
+- **編集モードで自動的にEdit Polygonsを開始**：通常の編集モードからの自動切り替えを制御します。オフなら元メッシュの編集になります。
+
+設定変更は次に編集モードへ入るときから有効です。編集中の切り替え、ファイル読込、
+Undo/Redoによる編集モードの復元では、自動で編集先を変更しません。
+自動切り替えはUIタイマーで検出するため、開始まで最大約0.05秒（処理が重い場合は
+それ以上）かかります。Tabやカスタムキー設定自体は書き換えません。
 
 モディファイアータブで編集したい **Edit Poly** を選択し、3Dビューポートで
 **Ctrl+Tab → Edit Poly** を選ぶと、Edit Polygonsボタンと同じ編集を開始します。
@@ -25,7 +41,7 @@ visibility is unchanged.
 
 **プリファレンス → アドオン → Edit Poly Modifier → Edit Polyのショートカット**
 で、編集開始・終了のキーを自由に割り当てられます。初期状態は未割り当てです。
-標準パイへの表示もアドオン設定で切り替えられます。通常のTab操作は変更しません。
+専用ショートカットは、パイ表示・自動切り替えの両方をオフにしても使用できます。
 
 The standard Blender **Mode** pie gains an **Edit Poly** entry for the active
 Edit Poly modifier in Object Mode, and **Finish Edit Poly** while editing its
@@ -36,6 +52,14 @@ Custom pies (including Pie Menu Editor) can invoke the same operator:
 ```python
 bpy.ops.edit_mesh_modifier.toggle_edit('INVOKE_DEFAULT')
 ```
+
+Automatic entry also covers ordinary Edit Mode commands (Tab, mode dropdown,
+and the native pie's Edit Mode). **Show Edit Poly in Mode Pie** and
+**Automatically Enter Edit Polygons** are independent preferences, both on by
+default. Disable automatic entry to edit the source mesh normally. The toggle
+shortcut remains usable with both preferences off. A 50 ms UI timer detects new
+mode entries without replacing keymaps; it may take longer while Blender is busy.
+Existing editing sessions and mode restoration on load or Undo/Redo are ignored.
 
 The integration targets Blender's standard `VIEW3D_MT_object_mode_pie`.
 A custom mode pie supplied by another add-on needs the operator added to it.

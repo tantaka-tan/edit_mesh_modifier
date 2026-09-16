@@ -1,6 +1,9 @@
 """Japanese strings for shape-key export."""
 
 data = {
+    "Edit Mode Access": "編集モードへのアクセス",
+    "Automatically Enter Edit Polygons": "編集モードで自動的にEdit Polygonsを開始",
+    "Entering Edit Mode with an Edit Poly modifier selected opens its cache instead of the source mesh": "Edit Polyを選択して編集モードへ入ると、元メッシュではなくキャッシュの編集を開始します",
     "Edit Poly: Toggle Edit Mode": "Edit Poly: 編集開始・終了",
     "Edit the selected Edit Poly modifier, or finish editing its cache": "選択中のEdit Polyを編集、またはキャッシュの編集を終了します",
     "Finish Edit Poly": "Edit Polyを終了",

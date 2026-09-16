@@ -7,6 +7,10 @@ from types import SimpleNamespace
 from unittest import mock
 
 import bpy
+try:
+    from _bpy_restrict_state import RestrictBlend
+except ImportError:
+    from bpy_restrict_state import RestrictBlend
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
@@ -56,7 +60,14 @@ class EditAccessTests(unittest.TestCase):
         bpy.ops.mesh.primitive_cube_add()
         self.obj = bpy.context.object
         self.context = Context()
+        access._resume_auto_edit()
         self.assertEqual(bpy.context.area.type, 'VIEW_3D')
+
+    def auto_operator(self, operation):
+        return mock.patch.object(access, 'bpy', SimpleNamespace(
+            context=bpy.context, app=bpy.app, data=bpy.data,
+            ops=SimpleNamespace(object=bpy.ops.object,
+                                edit_mesh_modifier=SimpleNamespace(edit=operation))))
 
     def build(self):
         self.assertEqual(bpy.ops.edit_mesh_modifier.add(), {'FINISHED'})
@@ -130,10 +141,15 @@ class EditAccessTests(unittest.TestCase):
         old_hook = access._pie_hook
         try:
             access.unregister()
+            self.assertFalse(bpy.app.timers.is_registered(access._auto_edit_tick))
+            self.assertTrue(all(callback not in handlers for handlers, callback in access._auto_handlers))
             self.assertIn(callback, menu.draw._draw_funcs)
             self.assertIn(old_hook[2], menu.draw._draw_funcs)
             self.assertNotIn(old_hook[1], menu.draw._draw_funcs)
-            access.register()
+            with RestrictBlend():
+                access.register()
+            self.assertTrue(bpy.app.timers.is_registered(access._auto_edit_tick))
+            self.assertTrue(all(handlers.count(callback) == 1 for handlers, callback in access._auto_handlers))
             self.assertIsNotNone(access._pie_hook)
             self.assertIn(callback, menu.draw._draw_funcs)
             self.assertEqual(sum(f.__qualname__.endswith('draw_with_edit_poly')
@@ -141,8 +157,114 @@ class EditAccessTests(unittest.TestCase):
         finally:
             menu.remove(callback)
 
+    def test_auto_entry_selects_active_stage_and_does_not_reenter_cache(self):
+        first, cache = self.build()
+        self.build()
+        self.obj.modifiers.active = first
+        session = Session()
+        operation = mock.Mock(side_effect=lambda *args:
+                              addon.EDIT_MESH_MODIFIER_OT_Edit.execute(session, self.context))
+        access._auto_edit_tick()  # Observe Object Mode.
+        bpy.ops.object.mode_set(mode='EDIT', toggle=True)
+        try:
+            with self.auto_operator(operation):
+                access._auto_edit_tick()
+                self.assertEqual(bpy.context.object, cache)
+                self.assertTrue(self.obj.hide_get())
+                access._auto_edit_tick()
+                operation.assert_called_once_with('INVOKE_DEFAULT')
+                bpy.ops.object.mode_set(mode='OBJECT')
+                addon.EDIT_MESH_MODIFIER_OT_Edit.modal(session, self.context, SimpleNamespace(type='TIMER'))
+                access._auto_edit_tick()
+                self.assertEqual(bpy.context.object, self.obj)
+                self.assertFalse(self.obj.hide_get())
+                self.assertEqual(operation.call_count, 1)
+        finally:
+            if bpy.context.object == cache:
+                session._cleanup(self.context)
 
-addon.register()
+    def test_auto_off_keeps_source_editing(self):
+        self.build()
+        access._auto_edit_tick()
+        bpy.ops.object.mode_set(mode='EDIT')
+        operation = mock.Mock()
+        with mock.patch.object(access, '_auto_enabled', return_value=False), self.auto_operator(operation):
+            self.assertIsNone(access._auto_edit_tick())
+        operation.assert_not_called()
+        self.assertEqual(bpy.context.object, self.obj)
+        self.assertEqual(self.obj.mode, 'EDIT')
+
+    def test_enabling_while_editing_waits_for_next_entry(self):
+        self.build()
+        bpy.ops.object.mode_set(mode='EDIT')
+        access.update_auto_edit(None, bpy.context)
+        operation = mock.Mock(return_value={'FINISHED'})
+        with self.auto_operator(operation):
+            access._auto_edit_tick()
+            operation.assert_not_called()
+            bpy.ops.object.mode_set(mode='OBJECT')
+            access._auto_edit_tick()
+            bpy.ops.object.mode_set(mode='EDIT')
+            access._auto_edit_tick()
+            operation.assert_called_once_with('INVOKE_DEFAULT')
+
+    def test_auto_ignores_other_modifiers_and_missing_caches(self):
+        mod, cache = self.build()
+        native = self.obj.modifiers.new('Other', 'SUBSURF')
+        self.obj.modifiers.active = native
+        operation = mock.Mock()
+        with self.auto_operator(operation):
+            access._auto_edit_tick()
+            bpy.ops.object.mode_set(mode='EDIT')
+            access._auto_edit_tick()
+            operation.assert_not_called()
+            bpy.ops.object.mode_set(mode='OBJECT')
+            self.obj.modifiers.active = mod
+            addon.set_modifier_socket_value(mod, addon.OBJ_SOCKET, None)
+            access._auto_edit_tick()
+            bpy.ops.object.mode_set(mode='EDIT')
+            access._auto_edit_tick()
+            operation.assert_not_called()
+
+    def test_auto_does_not_redirect_undo_or_load_restoration(self):
+        self.build()
+        access._auto_edit_tick()
+        operation = mock.Mock()
+        with self.auto_operator(operation):
+            access._pause_auto_edit()
+            bpy.ops.object.mode_set(mode='EDIT')
+            access._auto_edit_tick()
+            access._resume_auto_edit()
+            access._auto_edit_tick()
+            operation.assert_not_called()
+
+    def test_failed_auto_entry_restores_mode_without_repeated_attempts(self):
+        self.build()
+        access._auto_edit_tick()
+        bpy.ops.object.mode_set(mode='EDIT')
+
+        def fail(*args):
+            bpy.ops.object.mode_set(mode='OBJECT')
+            raise RuntimeError('Simulated entry failure')
+
+        operation = mock.Mock(side_effect=fail)
+        with self.auto_operator(operation):
+            access._auto_edit_tick()
+            self.assertEqual(bpy.context.object, self.obj)
+            self.assertEqual(self.obj.mode, 'EDIT')
+            access._auto_edit_tick()
+            operation.assert_called_once()
+
+    def test_disabling_stops_timer_and_reenabling_restarts_it(self):
+        with mock.patch.object(access, '_auto_enabled', return_value=False):
+            access.update_auto_edit(None, bpy.context)
+            self.assertFalse(bpy.app.timers.is_registered(access._auto_edit_tick))
+        access.update_auto_edit(None, bpy.context)
+        self.assertTrue(bpy.app.timers.is_registered(access._auto_edit_tick))
+
+
+with RestrictBlend():
+    addon.register()
 area = next(area for area in bpy.context.screen.areas if area.type == 'VIEW_3D')
 with bpy.context.temp_override(area=area):
     result = unittest.TextTestRunner(verbosity=2).run(

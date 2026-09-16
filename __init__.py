@@ -3,7 +3,7 @@
 bl_info = {
     "name": "Edit Poly Modifier [编辑多边形修改器]",  # 编辑多边形修改器
     "author": "RARA",
-    "version": (1, 0, 9),
+    "version": (1, 0, 10),
     "blender": (4, 2, 0),
     'doc_url': 'https://github.com/tantaka-tan/edit_mesh_modifier#readme',
     "location": "Properties > Modifiers Tab",  # 属性面板 > 修改器页签
@@ -995,6 +995,13 @@ class EDIT_MESH_MODIFIER_Preferences(bpy.types.AddonPreferences):
         default=True,
     )
 
+    auto_edit_polygons: bpy.props.BoolProperty(
+        name="Automatically Enter Edit Polygons",
+        description="Entering Edit Mode with an Edit Poly modifier selected opens its cache instead of the source mesh",
+        default=True,
+        update=edit_access.update_auto_edit,
+    )
+
     auto_rehash: bpy.props.BoolProperty(
         name="Auto Rehash on Duplicate",
         description="Automatically generate a new hash and cache when an object is duplicated (Shift+D)",
@@ -1015,7 +1022,10 @@ class EDIT_MESH_MODIFIER_Preferences(bpy.types.AddonPreferences):
         box.label(text="Automation & Performance", icon='SETTINGS')
         box.prop(self, "auto_rehash")
         box.prop(self, "auto_sync_upstream")
+        box = col.box()
+        box.label(text="Edit Mode Access", icon='EDITMODE_HLT')
         box.prop(self, "show_in_mode_pie")
+        box.prop(self, "auto_edit_polygons")
         edit_access.draw_preferences(col, context)
         
         col.label(text="Instructions", icon='INFO')  # 说明

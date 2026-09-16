@@ -1,3 +1,10 @@
+V1.0.10 Update Notes
+
+- With an Edit Poly modifier selected, entering ordinary Edit Mode now opens Edit Polygons automatically (enabled by default).
+- Add an independent automatic-entry preference beside the existing mode-pie visibility preference; the dedicated shortcut remains available with either feature disabled.
+- Detect mode entry on the UI timer without replacing Tab or custom keymaps. Reuse the existing cache editor and its exit/visibility cleanup.
+- Do not redirect an existing edit session on preference changes, file loading, or Undo/Redo restoration. Stop monitoring when the preference or add-on is disabled.
+
 V1.0.9 Update Notes
 
 - Add Edit Poly to Blender's standard mode-switch pie (Ctrl+Tab) when the selected modifier has a mesh cache.
