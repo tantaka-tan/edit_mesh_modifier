@@ -1,15 +1,15 @@
 schema_version = "1.0.0"
 blender_version_min = "4.2.0"
-version = "1.0.4"
+version = "1.0.8"
 id = "edit_mesh_modifier"
 name = "Edit Poly Modifier [编辑多边形修改器]"
 tagline = "Edit the mesh via a cache object, applied in real time"
 license = ["SPDX:GPL-3.0-or-later"]
-maintainer = "RARA"
+maintainer = "tantaka-tan"
 type = "add-on"
-website = "https://github.com/raracannot/edit_mesh_modifier"
+website = "https://github.com/tantaka-tan/edit_mesh_modifier"
 copyright = ["2026 RARA"]
 tags = ["Object"]
 
 [build]
-paths_exclude_pattern = ["__pycache__/", "pic/", ".git", ".gitignore", "*.zip", "*.md"]
+paths_exclude_pattern = ["__pycache__/", "pic/", "tests/", ".git", ".gitignore", "*.zip", "*.md"]

@@ -5,6 +5,7 @@
 import bpy
 
 from . import zh_HANS
+from . import ja_JP
 
 TRANSLATION_DOMAIN = "edit_mesh_modifier"
 
@@ -12,6 +13,7 @@ TRANSLATION_DOMAIN = "edit_mesh_modifier"
 # 额外注册本插件的操作符/面板 idname 作兜底（部分场合 Blender 用 idname 查找）
 _UI_CONTEXTS = ("*", "Operator",
                 "edit_mesh_modifier.add", "edit_mesh_modifier.build", "edit_mesh_modifier.edit",
+                "edit_mesh_modifier.shape_key",
                 "EDIT_MESH_MODIFIER_PT_Main")
 
 
@@ -29,6 +31,7 @@ def register():
     if zh_HANS.data:
         for lang in ("zh_CN", "zh_HANS"):
             combined.update(_build_translations(zh_HANS.data, lang))
+    combined.update(_build_translations(ja_JP.data, "ja_JP"))
     if combined:
         try:
             bpy.app.translations.register(TRANSLATION_DOMAIN, combined)

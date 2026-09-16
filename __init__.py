@@ -3,9 +3,9 @@
 bl_info = {
     "name": "Edit Poly Modifier [编辑多边形修改器]",  # 编辑多边形修改器
     "author": "RARA",
-    "version": (1, 0, 4),
+    "version": (1, 0, 8),
     "blender": (4, 2, 0),
-    'doc_url': 'https://space.bilibili.com/27284213',
+    'doc_url': 'https://github.com/tantaka-tan/edit_mesh_modifier#readme',
     "location": "Properties > Modifiers Tab",  # 属性面板 > 修改器页签
     "description": "Edit the mesh via a cache object, applied in real time",  # 通过缓存物体编辑网格，并将编辑结果实时应用到原物体
     "category": "Object",
@@ -16,6 +16,7 @@ import os  # noqa: E402
 import bpy  # noqa: E402
 import uuid  # noqa: E402
 from . import translation as _i18n  # noqa: E402
+from .shape_keys import EDIT_MESH_MODIFIER_OT_ShapeKey, EDIT_MESH_MODIFIER_MT_ShapeKey  # noqa: E402
 
 ADDON_DIR = os.path.dirname(os.path.abspath(__file__))
 LIB_PATH = os.path.join(ADDON_DIR, "lib.blend")
@@ -197,6 +198,10 @@ def bake_cache(context, obj, cache_obj, target, hash_str=""):
                 old = cache_obj.data
                 new = eval_mesh.copy()
                 cache_obj.data = new
+                # The cache already contains evaluated coordinates. Inherited
+                # shape keys may have the pre-modifier topology and deform it again.
+                if new.shape_keys is not None:
+                    cache_obj.shape_key_clear()
                 if old is not new:
                     try:
                         if old.users <= 1:
@@ -234,7 +239,7 @@ def backup_point_attrs(mesh):
     """编辑前把 cache_base/cache_idx/cache_pos 备份进 idx_pos_cache 字符串属性。
 
     字符串属性几乎不会被编辑操作触碰，作为关键属性的"隐形保险柜"。
-    注意：字符串属性 .value 在 Blender 4.4+ 是 bytes，在 4.2/4.3 仍是 str，需按版本处理。
+    字符串属性的赋值类型按实际 API 处理，不依赖版本号。
     """
     base = mesh.attributes.get(ATTR_BASE)
     idx = mesh.attributes.get(ATTR_IDX)
@@ -248,6 +253,10 @@ def backup_point_attrs(mesh):
         sa = None
     if sa is None:
         sa = mesh.attributes.new(ATTR_JSON, "STRING", "POINT")
+    # Adding/removing a layer can invalidate existing Attribute RNA references.
+    base = mesh.attributes[ATTR_BASE]
+    idx = mesh.attributes[ATTR_IDX]
+    pos = mesh.attributes[ATTR_POS]
     d = sa.data
     for i in range(n):
         payload = json.dumps({
@@ -255,8 +264,11 @@ def backup_point_attrs(mesh):
             "idx": int(idx.data[i].value),
             "pos": [round(c, 6) for c in pos.data[i].vector],
         })
-        # 4.4+ 字符串属性 .value 为 bytes；4.2/4.3 为 str
-        d[i].value = payload.encode() if bpy.app.version >= (4, 4) else payload
+        # Some 4.2 builds already require bytes; use the runtime API contract.
+        try:
+            d[i].value = payload.encode()
+        except TypeError:
+            d[i].value = payload
 
 
 def restore_point_attrs(mesh):
@@ -656,6 +668,8 @@ class EDIT_MESH_MODIFIER_OT_Edit(bpy.types.Operator):
     _cache_obj = None
     _overlay_states = []
     _snapshot = None
+    _src_hidden = None
+    _src_view_layer = None
 
     @classmethod
     def poll(cls, context):
@@ -677,6 +691,8 @@ class EDIT_MESH_MODIFIER_OT_Edit(bpy.types.Operator):
 
         self._src_obj = src
         self._cache_obj = cache
+        self._src_hidden = None
+        self._src_view_layer = context.view_layer
         
         
         # 记录并打开所有 3D 视图的重拓扑覆盖
@@ -722,6 +738,9 @@ class EDIT_MESH_MODIFIER_OT_Edit(bpy.types.Operator):
             except Exception:
                 self._snapshot = None
 
+            # Hide only in the editing view layer; keep render visibility intact.
+            self._src_hidden = src.hide_get(view_layer=self._src_view_layer)
+            src.hide_set(True, view_layer=self._src_view_layer)
             bpy.ops.object.mode_set(mode='EDIT')
 
             wm = context.window_manager
@@ -750,8 +769,22 @@ class EDIT_MESH_MODIFIER_OT_Edit(bpy.types.Operator):
             return {'FINISHED'}
         return {'PASS_THROUGH'}
 
+    def cancel(self, context):
+        self._cleanup(context)
+
+    def _restore_source_visibility(self):
+        if self._src_hidden is not None and _object_alive(self._src_obj):
+            try:
+                self._src_obj.hide_set(self._src_hidden, view_layer=self._src_view_layer)
+            except (ReferenceError, RuntimeError):
+                pass
+        self._src_hidden = None
+        self._src_view_layer = None
+
     def _cleanup(self, context):
         """清理退出：回物体模式、unlink 缓存、恢复原物体为活动。"""
+        # Restore before other cleanup steps, including error/cancellation paths.
+        self._restore_source_visibility()
         try:
             bpy.ops.object.mode_set(mode='OBJECT')
         except Exception:
@@ -913,6 +946,7 @@ class EDIT_MESH_MODIFIER_PT_Main(bpy.types.Panel):
             red_row.alert = True
             # 编辑多边形
             red_row.operator(EDIT_MESH_MODIFIER_OT_Edit.bl_idname, text="Edit Polygons", icon='EDITMODE_HLT')
+            row.menu("EDIT_MESH_MODIFIER_MT_ShapeKey", text="", icon='SHAPEKEY_DATA')
             socket_icon = 'UV_SYNC_SELECT' if get_modifier_socket_value(mod, AUTO_FIX_SOCKET) else 'FREEZE'
             draw_socket_input(row, mod, AUTO_FIX_SOCKET, text="", icon=socket_icon)
             row.label(text="", icon='BLANK1') #icon
@@ -944,6 +978,7 @@ class EDIT_MESH_MODIFIER_PT_Main(bpy.types.Panel):
             row.operator(EDIT_MESH_MODIFIER_OT_Edit.bl_idname, text="Edit Polygons", icon='EDITMODE_HLT')
             socket_icon = 'UV_SYNC_SELECT' if get_modifier_socket_value(mod, AUTO_FIX_SOCKET) else 'FREEZE'
             draw_socket_input(row, mod, AUTO_FIX_SOCKET, text="Auto Position Fix", icon=socket_icon)  # 位置自动修正
+            col.menu("EDIT_MESH_MODIFIER_MT_ShapeKey", text="Shape Keys", icon='SHAPEKEY_DATA')
         else:
             col.label(text="Note: buttons are only visible when an Edit Poly modifier is selected",icon="QUESTION")  # 注意，按钮仅当选中【编辑多边形修改器】后可见
             
@@ -1162,6 +1197,8 @@ CLASSES = (
     EDIT_MESH_MODIFIER_OT_Add,
     EDIT_MESH_MODIFIER_OT_Build,
     EDIT_MESH_MODIFIER_OT_Edit,
+    EDIT_MESH_MODIFIER_OT_ShapeKey,
+    EDIT_MESH_MODIFIER_MT_ShapeKey,
     EDIT_MESH_MODIFIER_PT_Main,
     EDIT_MESH_MODIFIER_Preferences,
 )

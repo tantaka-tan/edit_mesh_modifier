@@ -1,3 +1,30 @@
+V1.0.8 Update Notes
+
+- Shape-key export now captures the final viewport result through the selected Edit Poly, including all enabled preceding stages.
+- Ignore modifiers disabled in the viewport, regardless of their render visibility.
+- Save keeps the stack intact at key value 0. Apply activates the key, disables captured upstream stages, and removes the selected stage only if it was enabled.
+- Evaluate on a temporary object and subtract the existing shape-key mix to prevent double application.
+
+V1.0.7 Update Notes
+
+- Allow shape-key export from stacked Edit Poly stages when every upstream stage preserves topology.
+- Compose vertex correspondence through the stack and export only the selected stage's offsets.
+- Prevent applying a shape key beneath a frozen upstream Edit Poly that would suppress it.
+
+V1.0.6 Update Notes
+
+- Hide the source object in the current view layer while editing the Edit Poly cache.
+- Restore its previous visibility on edit exit, cancellation, or failure to enter Edit Mode.
+
+V1.0.5 Update Notes
+
+- Added Save as Shape Key and Apply as Shape Key in the Edit Poly panel.
+- Export local edit offsets with vertex identity and topology checks; preserve existing relative shape keys.
+- Added Japanese translations for shape-key export.
+- New and rebuilt caches no longer inherit incompatible shape keys from evaluated meshes.
+- Fixed point-attribute backups on Blender 4.2 builds that require bytes.
+- Added Blender integration tests for export, existing keys, and incompatible data.
+
 V1.0.2 Update Notes
 
 Added:
