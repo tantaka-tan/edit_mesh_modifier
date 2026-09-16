@@ -207,12 +207,14 @@ class ShapeKeyExportTests(unittest.TestCase):
             [tuple(old.vertices[i].co) for i in order],
             [tuple(inverse[i] for i in edge.vertices) for edge in old.edges],
             [tuple(inverse[i] for i in face.vertices) for face in old.polygons])
-        for name, kind in ((addon.ATTR_IDX, 'INT'), (addon.ATTR_BASE, 'BOOLEAN'), (addon.ATTR_POS, 'FLOAT_VECTOR')):
+        for name, kind in ((addon.ATTR_IDX, 'INT'), (addon.ATTR_BASE, 'BOOLEAN'), (addon.ATTR_POS, 'FLOAT_VECTOR'),
+                           (addon.topology_guard.ORIGIN_ID, 'INT')):
             mesh.attributes.new(name, kind, 'POINT')
         for current, previous in enumerate(order):
             mesh.attributes[addon.ATTR_IDX].data[current].value = previous
             mesh.attributes[addon.ATTR_BASE].data[current].value = True
             mesh.attributes[addon.ATTR_POS].data[current].vector = old.attributes[addon.ATTR_POS].data[previous].vector
+            mesh.attributes[addon.topology_guard.ORIGIN_ID].data[current].value = old.attributes[addon.topology_guard.ORIGIN_ID].data[previous].value
         self.cache.data = mesh
         mesh.update()
         self.obj.update_tag()

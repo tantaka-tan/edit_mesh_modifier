@@ -103,6 +103,12 @@ def stack_offsets(obj, modifier):
     enabled = _enabled_prefix(obj, modifier)
     mapping = _prefix_vertex_map(obj, enabled)
     addon = sys.modules[__package__]
+    from . import topology_guard
+    for stage in enabled:
+        if stage.type == 'NODES' and stage.node_group and stage.node_group.name == addon.NG_EDIT:
+            reason = topology_guard.check_input(bpy.context, obj, stage)
+            if reason:
+                _fail(topology_guard.paused_message(reason))
     was_ready = addon._is_system_ready
     temporary = None
     try:
@@ -150,6 +156,7 @@ def stack_offsets(obj, modifier):
 
 def export_shape_key(obj, modifier, name, keep_modifier=True):
     from . import NG_EDIT, OBJ_SOCKET, get_modifier_socket_value, _remove_cache_object
+    from . import topology_guard
 
     if obj.type != 'MESH' or obj.mode != 'OBJECT':
         _fail("Switch the source mesh to Object Mode first.")
@@ -171,6 +178,7 @@ def export_shape_key(obj, modifier, name, keep_modifier=True):
     key = None
     saved_states = []
     removed_cache = None
+    removed_reference = None
     try:
         if keys is None:
             basis_created = obj.shape_key_add(name="Basis", from_mix=False)
@@ -190,6 +198,7 @@ def export_shape_key(obj, modifier, name, keep_modifier=True):
                     stage.show_render = False
             if modifier in enabled:
                 removed_cache = get_modifier_socket_value(modifier, OBJ_SOCKET)
+                removed_reference = topology_guard.reference(modifier)
                 obj.modifiers.remove(modifier)
     except Exception:
         for stage, viewport, render in saved_states:
@@ -205,6 +214,7 @@ def export_shape_key(obj, modifier, name, keep_modifier=True):
     obj.active_shape_key_index = old_active
     if removed_cache is not None:
         _remove_cache_object(removed_cache)
+    topology_guard.remove_unused_reference(removed_reference)
     return key
 
 
