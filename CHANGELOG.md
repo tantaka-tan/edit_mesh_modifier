@@ -1,3 +1,10 @@
+V1.0.9 Update Notes
+
+- Add Edit Poly to Blender's standard mode-switch pie (Ctrl+Tab) when the selected modifier has a mesh cache.
+- Use the same entry to finish cache editing and restore the source object.
+- Add an independently assignable Edit Poly toggle shortcut in add-on preferences, initially unassigned.
+- Expose the toggle as an operator for F3 search and custom pie menus. Normal Tab behavior is unchanged.
+
 V1.0.8 Update Notes
 
 - Shape-key export now captures the final viewport result through the selected Edit Poly, including all enabled preceding stages.

@@ -3,7 +3,7 @@
 bl_info = {
     "name": "Edit Poly Modifier [编辑多边形修改器]",  # 编辑多边形修改器
     "author": "RARA",
-    "version": (1, 0, 8),
+    "version": (1, 0, 9),
     "blender": (4, 2, 0),
     'doc_url': 'https://github.com/tantaka-tan/edit_mesh_modifier#readme',
     "location": "Properties > Modifiers Tab",  # 属性面板 > 修改器页签
@@ -16,6 +16,8 @@ import os  # noqa: E402
 import bpy  # noqa: E402
 import uuid  # noqa: E402
 from . import translation as _i18n  # noqa: E402
+from . import edit_access  # noqa: E402
+from .edit_access import EDIT_MESH_MODIFIER_OT_ToggleEdit  # noqa: E402
 from .shape_keys import EDIT_MESH_MODIFIER_OT_ShapeKey, EDIT_MESH_MODIFIER_MT_ShapeKey  # noqa: E402
 
 ADDON_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -987,6 +989,12 @@ class EDIT_MESH_MODIFIER_PT_Main(bpy.types.Panel):
 class EDIT_MESH_MODIFIER_Preferences(bpy.types.AddonPreferences):
     bl_idname = __name__
 
+    show_in_mode_pie: bpy.props.BoolProperty(
+        name="Show Edit Poly in Mode Pie",
+        description="Add Edit Poly to the standard mode-switch pie menu (Ctrl+Tab)",
+        default=True,
+    )
+
     auto_rehash: bpy.props.BoolProperty(
         name="Auto Rehash on Duplicate",
         description="Automatically generate a new hash and cache when an object is duplicated (Shift+D)",
@@ -1007,6 +1015,8 @@ class EDIT_MESH_MODIFIER_Preferences(bpy.types.AddonPreferences):
         box.label(text="Automation & Performance", icon='SETTINGS')
         box.prop(self, "auto_rehash")
         box.prop(self, "auto_sync_upstream")
+        box.prop(self, "show_in_mode_pie")
+        edit_access.draw_preferences(col, context)
         
         col.label(text="Instructions", icon='INFO')  # 说明
         col.label(text="You can edit the mesh without applying modifiers")  # 你可以在不应用修改器的前提下
@@ -1197,6 +1207,7 @@ CLASSES = (
     EDIT_MESH_MODIFIER_OT_Add,
     EDIT_MESH_MODIFIER_OT_Build,
     EDIT_MESH_MODIFIER_OT_Edit,
+    EDIT_MESH_MODIFIER_OT_ToggleEdit,
     EDIT_MESH_MODIFIER_OT_ShapeKey,
     EDIT_MESH_MODIFIER_MT_ShapeKey,
     EDIT_MESH_MODIFIER_PT_Main,
@@ -1209,6 +1220,8 @@ def register():
     
     for cls in CLASSES:
         bpy.utils.register_class(cls)
+
+    edit_access.register()
 
     bpy.types.OBJECT_MT_modifier_add_edit.append(modifier_add_menu_draw)
     bpy.types.OBJECT_MT_modifier_add_generate.append(modifier_add_menu_draw)
@@ -1225,6 +1238,7 @@ def register():
 
     
 def unregister():
+    edit_access.unregister()
     _i18n.unregister()
 
     bpy.types.OBJECT_MT_modifier_add_edit.remove(modifier_add_menu_draw)

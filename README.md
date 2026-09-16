@@ -15,6 +15,31 @@ While Edit Polygons is active, the source object is hidden in the current view
 layer. Its previous visibility is restored on exit or cancellation; render
 visibility is unchanged.
 
+## Mode pie and shortcut (1.0.9)
+
+モディファイアータブで編集したい **Edit Poly** を選択し、3Dビューポートで
+**Ctrl+Tab → Edit Poly** を選ぶと、Edit Polygonsボタンと同じ編集を開始します。
+編集中は **Ctrl+Tab → Edit Polyを終了** または **Tab** で終了できます。
+複数のEdit Polyがある場合は、モディファイアータブで選択中の段を編集します。
+元オブジェクトはオブジェクトモードにしてから開始してください。
+
+**プリファレンス → アドオン → Edit Poly Modifier → Edit Polyのショートカット**
+で、編集開始・終了のキーを自由に割り当てられます。初期状態は未割り当てです。
+標準パイへの表示もアドオン設定で切り替えられます。通常のTab操作は変更しません。
+
+The standard Blender **Mode** pie gains an **Edit Poly** entry for the active
+Edit Poly modifier in Object Mode, and **Finish Edit Poly** while editing its
+cache. Assign a separate toggle key in add-on preferences, or find **Edit Poly:
+Toggle Edit Mode** with F3 in the 3D Viewport. The shortcut starts unassigned.
+Custom pies (including Pie Menu Editor) can invoke the same operator:
+
+```python
+bpy.ops.edit_mesh_modifier.toggle_edit('INVOKE_DEFAULT')
+```
+
+The integration targets Blender's standard `VIEW3D_MT_object_mode_pie`.
+A custom mode pie supplied by another add-on needs the operator added to it.
+
 ## Shape-key export (1.0.8)
 
 Select an Edit Poly modifier. In its dedicated panel, open the **Shape Keys**
@@ -61,4 +86,5 @@ Run in a separate Blender process:
 
 ```powershell
 blender --background --factory-startup --python-exit-code 1 --python tests/test_shape_keys.py
+blender --background --factory-startup --python-exit-code 1 --python tests/test_edit_access.py
 ```

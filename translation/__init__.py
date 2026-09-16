@@ -13,7 +13,7 @@ TRANSLATION_DOMAIN = "edit_mesh_modifier"
 # 额外注册本插件的操作符/面板 idname 作兜底（部分场合 Blender 用 idname 查找）
 _UI_CONTEXTS = ("*", "Operator",
                 "edit_mesh_modifier.add", "edit_mesh_modifier.build", "edit_mesh_modifier.edit",
-                "edit_mesh_modifier.shape_key",
+                "edit_mesh_modifier.shape_key", "edit_mesh_modifier.toggle_edit",
                 "EDIT_MESH_MODIFIER_PT_Main")
 
 

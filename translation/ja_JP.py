@@ -1,6 +1,15 @@
 """Japanese strings for shape-key export."""
 
 data = {
+    "Edit Poly: Toggle Edit Mode": "Edit Poly: 編集開始・終了",
+    "Edit the selected Edit Poly modifier, or finish editing its cache": "選択中のEdit Polyを編集、またはキャッシュの編集を終了します",
+    "Finish Edit Poly": "Edit Polyを終了",
+    "Use this command in the 3D Viewport": "3Dビューポートで実行してください",
+    "Select an Edit Poly modifier in Object Mode first": "オブジェクトモードでEdit Polyモディファイアーを選択してください",
+    "Show Edit Poly in Mode Pie": "モード切替パイにEdit Polyを表示",
+    "Add Edit Poly to the standard mode-switch pie menu (Ctrl+Tab)": "標準のモード切替パイメニュー（Ctrl+Tab）にEdit Polyを追加します",
+    "Edit Poly Shortcut": "Edit Polyのショートカット",
+    "Assign a key to start or finish Edit Poly editing": "Edit Polyの編集開始・終了に使うキーを割り当ててください",
     "Save the evaluated viewport result through this Edit Poly as a shape key; disabled modifiers are ignored": "選択したEdit Polyまでの表示形状をシェイプキーに保存します。無効なモディファイアーは除外します",
     "Saves the final viewport shape through the selected Edit Poly.": "選択したEdit Polyまでの最終表示形状を保存します。",
     "Disabled modifiers are ignored. Topology changes are not supported.": "表示がオフの段は除外します。頂点・辺・面の構成変更は非対応です。",
