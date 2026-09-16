@@ -1,3 +1,9 @@
+V1.0.11 Update Notes
+
+- Add Use Standard Edit Mode Appearance, enabled by default, for all Edit Polygons entry points.
+- Preserve the user's viewport overlays instead of forcing retopology shading. Temporarily copy source object color, display type, in-front and wire display settings to the cache.
+- Restore cache display settings on exit, cancellation or failed entry. Disable the preference to retain the previous retopology display.
+
 V1.0.10 Update Notes
 
 - With an Edit Poly modifier selected, entering ordinary Edit Mode now opens Edit Polygons automatically (enabled by default).

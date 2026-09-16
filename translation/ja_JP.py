@@ -1,6 +1,8 @@
 """Japanese strings for shape-key export."""
 
 data = {
+    "Use Standard Edit Mode Appearance": "通常の編集モードの表示設定を使う",
+    "Keep normal viewport overlays and use the source object's display color and settings; disable for the previous retopology display": "普段のオーバーレイ設定と元オブジェクトの表示色・表示設定を引き継ぎます。オフにすると従来のリトポロジー表示になります",
     "Edit Mode Access": "編集モードへのアクセス",
     "Automatically Enter Edit Polygons": "編集モードで自動的にEdit Polygonsを開始",
     "Entering Edit Mode with an Edit Poly modifier selected opens its cache instead of the source mesh": "Edit Polyを選択して編集モードへ入ると、元メッシュではなくキャッシュの編集を開始します",

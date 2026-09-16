@@ -262,6 +262,68 @@ class EditAccessTests(unittest.TestCase):
         access.update_auto_edit(None, bpy.context)
         self.assertTrue(bpy.app.timers.is_registered(access._auto_edit_tick))
 
+    def test_standard_appearance_preserves_overlays_and_restores_cache_display(self):
+        mod, cache = self.build()
+        space = bpy.context.area.spaces.active
+        original_retopology = space.overlay.show_retopology
+        self.obj.color = (0.2, 0.4, 0.7, 1.0)
+        self.obj.show_in_front = True
+        self.obj.show_wire = True
+        self.obj.show_all_edges = True
+        cache.color = (0.8, 0.1, 0.2, 1.0)
+        before_color = tuple(cache.color)
+        before_flags = (cache.show_in_front, cache.show_wire, cache.show_all_edges)
+        for retopology in (False, True):
+            with self.subTest(retopology=retopology):
+                space.overlay.show_retopology = retopology
+                session = Session()
+                try:
+                    addon.EDIT_MESH_MODIFIER_OT_Edit.execute(session, self.context)
+                    self.assertEqual(space.overlay.show_retopology, retopology)
+                    self.assertEqual(tuple(cache.color), tuple(self.obj.color))
+                    self.assertTrue(cache.show_in_front and cache.show_wire and cache.show_all_edges)
+                    self.assertEqual(cache.display_type, self.obj.display_type)
+                finally:
+                    session._cleanup(self.context)
+                self.assertEqual(tuple(cache.color), before_color)
+                self.assertEqual((cache.show_in_front, cache.show_wire, cache.show_all_edges), before_flags)
+                self.assertEqual(space.overlay.show_retopology, retopology)
+        space.overlay.show_retopology = original_retopology
+
+    def test_legacy_appearance_forces_retopology_then_restores_it(self):
+        mod, cache = self.build()
+        space = bpy.context.area.spaces.active
+        original = space.overlay.show_retopology
+        space.overlay.show_retopology = False
+        self.obj.color = (0.2, 0.4, 0.7, 1.0)
+        before_color = tuple(cache.color)
+        self.context.preferences = SimpleNamespace(addons={
+            'edit_mesh_modifier': SimpleNamespace(preferences=SimpleNamespace(standard_edit_appearance=False))})
+        session = Session()
+        try:
+            addon.EDIT_MESH_MODIFIER_OT_Edit.execute(session, self.context)
+            self.assertTrue(space.overlay.show_retopology)
+            self.assertEqual(tuple(cache.color), before_color)
+        finally:
+            addon.EDIT_MESH_MODIFIER_OT_Edit.cancel(session, self.context)
+        self.assertFalse(space.overlay.show_retopology)
+        space.overlay.show_retopology = original
+
+    def test_entry_failure_restores_display_settings(self):
+        mod, cache = self.build()
+        self.obj.color = (0.2, 0.4, 0.7, 1.0)
+        original = tuple(cache.color)
+        session = Session()
+        session.report = mock.Mock()
+        # Fail after display properties were copied, before entering Edit Mode.
+        with mock.patch.object(addon, 'bpy', SimpleNamespace(
+                ops=SimpleNamespace(object=SimpleNamespace(mode_set=mock.Mock(side_effect=RuntimeError('test')))),
+                data=bpy.data)):
+            result = addon.EDIT_MESH_MODIFIER_OT_Edit.execute(session, self.context)
+        self.assertEqual(result, {'CANCELLED'})
+        self.assertEqual(tuple(cache.color), original)
+        self.assertFalse(self.obj.hide_get())
+
 
 with RestrictBlend():
     addon.register()

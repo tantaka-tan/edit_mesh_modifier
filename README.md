@@ -15,6 +15,23 @@ While Edit Polygons is active, the source object is hidden in the current view
 layer. Its previous visibility is restored on exit or cancellation; render
 visibility is unchanged.
 
+## Edit Mode appearance (1.0.11)
+
+**プリファレンス → アドオン → Edit Poly Modifier → 編集モードへのアクセス** に
+**通常の編集モードの表示設定を使う** を追加しました。初期状態はオンです。
+Edit Polygonsに入ってもリトポロジー表示を強制せず、普段のオーバーレイ・透過・
+シェーディング設定を保ちます。元オブジェクトの表示色、表示方法、最前面表示、
+ワイヤー表示設定も編集中のキャッシュへ引き継ぎます。
+オフにすると従来のリトポロジー表示になります。変更は次回の編集開始から有効です。
+
+**Use Standard Edit Mode Appearance** keeps existing viewport settings and
+temporarily copies the source object's color, display type, in-front and wire
+display settings to the cache. It does not change the Blender theme or materials.
+Previously enabled retopology remains enabled, just as in ordinary Edit Mode.
+Random object colors can differ because the cache is a separate object.
+Disable the preference to force the previous retopology overlay during editing.
+Cache display settings are restored on exit, cancellation and entry failure.
+
 ## Automatic Edit Polygons, mode pie and shortcut (1.0.10)
 
 **Edit Poly** をモディファイアータブで選択した状態で **Tab**、またはモード選択

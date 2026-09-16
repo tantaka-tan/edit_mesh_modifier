@@ -3,7 +3,7 @@
 bl_info = {
     "name": "Edit Poly Modifier [编辑多边形修改器]",  # 编辑多边形修改器
     "author": "RARA",
-    "version": (1, 0, 10),
+    "version": (1, 0, 11),
     "blender": (4, 2, 0),
     'doc_url': 'https://github.com/tantaka-tan/edit_mesh_modifier#readme',
     "location": "Properties > Modifiers Tab",  # 属性面板 > 修改器页签
@@ -669,6 +669,7 @@ class EDIT_MESH_MODIFIER_OT_Edit(bpy.types.Operator):
     _src_obj = None
     _cache_obj = None
     _overlay_states = []
+    _cache_display_state = None
     _snapshot = None
     _src_hidden = None
     _src_view_layer = None
@@ -697,13 +698,26 @@ class EDIT_MESH_MODIFIER_OT_Edit(bpy.types.Operator):
         self._src_view_layer = context.view_layer
         
         
-        # 记录并打开所有 3D 视图的重拓扑覆盖
+        # Standard appearance preserves the user's existing viewport settings.
         self._overlay_states = []
-        for sp in _get_view3d_spaces(context):
-            self._overlay_states.append((sp, sp.overlay.show_retopology))
-            sp.overlay.show_retopology = True
+        self._cache_display_state = None
 
         try:
+            entry = context.preferences.addons.get(__name__)
+            standard_appearance = entry is None or entry.preferences.standard_edit_appearance
+            if standard_appearance:
+                properties = ('color', 'display_type', 'show_in_front', 'show_wire', 'show_all_edges')
+                self._cache_display_state = {
+                    name: tuple(cache.color) if name == 'color' else getattr(cache, name)
+                    for name in properties
+                }
+                for name in properties:
+                    setattr(cache, name, getattr(src, name))
+            else:
+                for sp in _get_view3d_spaces(context):
+                    self._overlay_states.append((sp, sp.overlay.show_retopology))
+                    sp.overlay.show_retopology = True
+
             bpy.ops.object.mode_set(mode='OBJECT')
             for coll in list(cache.users_collection):
                 coll.objects.unlink(cache)
@@ -800,6 +814,13 @@ class EDIT_MESH_MODIFIER_OT_Edit(bpy.types.Operator):
         self._overlay_states = []
 
         cache = self._cache_obj
+        if _object_alive(cache) and self._cache_display_state is not None:
+            for name, value in self._cache_display_state.items():
+                try:
+                    setattr(cache, name, value)
+                except (ReferenceError, RuntimeError):
+                    pass
+        self._cache_display_state = None
         if _object_alive(cache):
             # 退出编辑后从字符串备份恢复关键点属性（尽力而为）
             try:
@@ -989,6 +1010,12 @@ class EDIT_MESH_MODIFIER_PT_Main(bpy.types.Panel):
 class EDIT_MESH_MODIFIER_Preferences(bpy.types.AddonPreferences):
     bl_idname = __name__
 
+    standard_edit_appearance: bpy.props.BoolProperty(
+        name="Use Standard Edit Mode Appearance",
+        description="Keep normal viewport overlays and use the source object's display color and settings; disable for the previous retopology display",
+        default=True,
+    )
+
     show_in_mode_pie: bpy.props.BoolProperty(
         name="Show Edit Poly in Mode Pie",
         description="Add Edit Poly to the standard mode-switch pie menu (Ctrl+Tab)",
@@ -1026,6 +1053,7 @@ class EDIT_MESH_MODIFIER_Preferences(bpy.types.AddonPreferences):
         box.label(text="Edit Mode Access", icon='EDITMODE_HLT')
         box.prop(self, "show_in_mode_pie")
         box.prop(self, "auto_edit_polygons")
+        box.prop(self, "standard_edit_appearance")
         edit_access.draw_preferences(col, context)
         
         col.label(text="Instructions", icon='INFO')  # 说明
